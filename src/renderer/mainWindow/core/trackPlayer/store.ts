@@ -4,7 +4,7 @@
 import { atom, getDefaultStore, type PrimitiveAtom } from 'jotai';
 import type { IMusicItemSlim } from '@appTypes/infra/musicSheet';
 import { PlayerState, RepeatMode } from '@common/constant';
-import type { ICurrentLyric } from './types';
+import type { ICurrentLyric, IPlaybackSourceInfo } from './types';
 
 const store = getDefaultStore();
 
@@ -26,6 +26,9 @@ export const progressAtom: PrimitiveAtom<{ currentTime: number; duration: number
 export const volumeAtom: PrimitiveAtom<number> = atom<number>(1);
 export const speedAtom: PrimitiveAtom<number> = atom<number>(1);
 export const qualityAtom: PrimitiveAtom<IMusic.IQualityKey> = atom<IMusic.IQualityKey>('standard');
+export const sourceInfoAtom: PrimitiveAtom<IPlaybackSourceInfo | null> = atom(
+    null as IPlaybackSourceInfo | null,
+);
 export const currentLyricAtom: PrimitiveAtom<ICurrentLyric | null> = atom(
     null as ICurrentLyric | null,
 );

@@ -3,6 +3,19 @@
  */
 import type LyricParser from '@common/lyricParser';
 import type { IParsedLrcItem } from '@common/lyricParser';
+import type { IAudioFormat } from '@appTypes/infra/localMusic';
+
+export interface IPlaybackSourceInfo {
+    isLocal: boolean;
+    localPath?: string;
+    audioFormat?: IAudioFormat;
+    metadataError?: string;
+}
+
+export interface IResolvedPlaybackSource {
+    source: IPlugin.IMediaSourceResult;
+    sourceInfo: IPlaybackSourceInfo;
+}
 
 export interface ICurrentLyric {
     parser?: LyricParser;

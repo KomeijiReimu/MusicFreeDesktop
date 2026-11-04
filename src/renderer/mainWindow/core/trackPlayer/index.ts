@@ -6,7 +6,7 @@
  */
 import type { IMusicItemSlim } from '@appTypes/infra/musicSheet';
 import { PlayerState, RepeatMode, REPEAT_MODE_NEXT, QUALITY_KEYS } from '@common/constant';
-import { isSameMedia } from '@common/mediaKey';
+import { compositeKey, isSameMedia } from '@common/mediaKey';
 import musicItemToSlim from '@common/musicItemToSlim';
 import delay from '@common/delay';
 import throttle from '@common/throttle';
@@ -14,6 +14,7 @@ import musicSheet from '@infra/musicSheet/renderer';
 import pluginManager from '@infra/pluginManager/renderer';
 import appConfig from '@infra/appConfig/renderer';
 import downloadManager from '@infra/downloadManager/renderer';
+import localMusic from '@infra/localMusic/renderer';
 import fsUtil from '@infra/fsUtil/renderer';
 import { addToRecentlyPlayed } from '../recentlyPlayed';
 import appSync from '@infra/appSync/renderer/main';
@@ -21,7 +22,12 @@ import { syncKV } from '@renderer/common/kvStore';
 import { type IAudioController, createAudioController } from './audioController';
 import PlayQueue from './playQueue';
 import LyricManager from './lyricManager';
-import type { IPlayOptions, IResolveSourceOptions } from './types';
+import type {
+    IPlayOptions,
+    IPlaybackSourceInfo,
+    IResolvedPlaybackSource,
+    IResolveSourceOptions,
+} from './types';
 import {
     store,
     currentMusicAtom,
@@ -31,6 +37,7 @@ import {
     volumeAtom,
     speedAtom,
     qualityAtom,
+    sourceInfoAtom,
     currentLyricAtom,
 } from './store';
 
@@ -107,6 +114,8 @@ class TrackPlayer {
     private playQueue!: PlayQueue;
     private lyricManager!: LyricManager;
     private playbackRequestId = 0;
+    /** 在线请求偏好独立于当前源的实际音质；本地文件和在线降级不会覆盖它。 */
+    private onlineQuality: IMusic.IQualityKey = 'standard';
 
     // 进度持久化节流
     private lastProgressWriteTime = 0;
@@ -141,15 +150,20 @@ class TrackPlayer {
             : RepeatMode.Queue;
         const savedMusic = syncKV.get('player.currentMusic');
         const savedProgress = syncKV.get('player.currentProgress') ?? 0;
-        const savedQuality = syncKV.get('player.currentQuality') ?? 'standard';
-        const validQuality: IMusic.IQualityKey = QUALITY_KEYS.includes(savedQuality as any)
-            ? (savedQuality as IMusic.IQualityKey)
-            : 'standard';
+        const savedQuality = syncKV.get('player.currentQuality');
+        const defaultQuality = appConfig.getConfigByKey('playMusic.defaultQuality');
+        const validQuality = QUALITY_KEYS.includes(savedQuality)
+            ? savedQuality
+            : QUALITY_KEYS.includes(defaultQuality)
+              ? defaultQuality
+              : 'standard';
+        this.onlineQuality = validQuality;
 
         store.set(volumeAtom, volume);
         store.set(speedAtom, speed);
         store.set(repeatModeAtom, repeatMode);
         store.set(qualityAtom, validQuality);
+        store.set(sourceInfoAtom, null);
 
         this.audioController.setVolume(volume);
         this.audioController.setSpeed(speed);
@@ -182,16 +196,17 @@ class TrackPlayer {
                 const result = await this.resolveSource(musicItem, validQuality);
 
                 if (
-                    result?.url &&
+                    result &&
                     requestId === this.playbackRequestId &&
                     this.isCurrentMusic(savedMusic)
                 ) {
-                    this.audioController.setTrackSource(result, musicItem);
+                    this.commitSource(result, musicItem);
                     this.audioController.seekTo(savedProgress);
-                    store.set(qualityAtom, result.quality!);
+                    store.set(playerStateAtom, PlayerState.Paused);
                 }
-            } catch {
-                // 恢复失败不阻塞启动
+            } catch (error) {
+                // 恢复失败不阻塞启动，保留日志供排查。
+                console.error('[TrackPlayer] Failed to restore playback source:', error);
             }
         }
         // 5. 绑定事件
@@ -277,6 +292,7 @@ class TrackPlayer {
 
         // 切歌
         const requestId = ++this.playbackRequestId;
+        store.set(sourceInfoAtom, null);
         this.setCurrentMusic(targetSlim);
         this.audioController.prepareTrack();
 
@@ -291,18 +307,15 @@ class TrackPlayer {
             if (requestId !== this.playbackRequestId) return;
             this.setCurrentMusic(musicItem, false);
             // 获取音源：优先使用已下载的本地文件
-            const quality = store.get(qualityAtom);
+            const quality = this.onlineQuality;
             const result = await this.resolveSource(musicItem, quality);
 
-            if (!result?.url) throw new Error('No media source');
+            if (!result) throw new Error('No media source');
             if (requestId !== this.playbackRequestId) return;
 
             // 播放
-            store.set(qualityAtom, result.quality ?? quality);
-            this.audioController.setTrackSource(result, musicItem);
+            this.commitSource(result, musicItem);
             this.audioController.play();
-
-            syncKV.set('player.currentQuality', result.quality!);
 
             // 记录到最近播放（异步，不阻塞播放）
             addToRecentlyPlayed(musicItem).catch(() => {});
@@ -325,10 +338,13 @@ class TrackPlayer {
                         this.setCurrentMusic(enriched, false);
                     }
                 })
-                .catch(() => {});
+                .catch((error) => {
+                    console.error('[TrackPlayer] Failed to enrich music metadata:', error);
+                });
         } catch (e) {
             if (requestId !== this.playbackRequestId) return;
             this.audioController.reset();
+            store.set(sourceInfoAtom, null);
             await this.handlePlayError(targetSlim, e);
         }
     }
@@ -397,15 +413,25 @@ class TrackPlayer {
         const currentMusic = this.playQueue.getCurrentMusic();
         const currentIdx = this.playQueue.getCurrentIndex();
         const bases = Array.isArray(targets) ? targets : [targets];
+        const removedKeys = new Set(bases.map((item) => compositeKey(item.platform, item.id)));
         const wasCurrentRemoved =
-            currentMusic != null && bases.some((t) => isSameMedia(t, currentMusic));
-        const remaining = this.playQueue.queue.filter(
-            (item) => !bases.some((target) => isSameMedia(item, target)),
-        );
-        const nextMusic =
-            this.playQueue.queue
-                .slice(currentIdx + 1)
-                .find((item) => !bases.some((target) => isSameMedia(item, target))) ?? remaining[0];
+            currentMusic != null &&
+            removedKeys.has(compositeKey(currentMusic.platform, currentMusic.id));
+        let nextMusic: IMusicItemSlim | undefined;
+        if (
+            wasCurrentRemoved &&
+            !this.playQueue.isRandomActive &&
+            !this.playQueue.isShuffleActive
+        ) {
+            const queue = this.playQueue.queue;
+            for (let offset = 1; offset <= queue.length; offset++) {
+                const item = queue[(currentIdx + offset) % queue.length];
+                if (!removedKeys.has(compositeKey(item.platform, item.id))) {
+                    nextMusic = item;
+                    break;
+                }
+            }
+        }
 
         this.playQueue.remove(targets);
 
@@ -475,16 +501,32 @@ class TrackPlayer {
 
     async setQuality(quality: IMusic.IQualityKey): Promise<boolean> {
         const current = this.playQueue.getCurrentMusic();
+        const currentSource = store.get(sourceInfoAtom);
+        // 文件没有可切换的在线档位；未解析出当前源时也不能发起第二次换源。
+        if (
+            !current ||
+            !currentSource ||
+            currentSource.isLocal ||
+            !this.audioController.hasSource
+        ) {
+            return false;
+        }
         const prevQuality = store.get(qualityAtom);
-        if (!current || quality === prevQuality) return true;
-
-        const currentTime = store.get(progressAtom).currentTime;
-        const wasPlaying = this.audioController.playerState === PlayerState.Playing;
+        const requestId = ++this.playbackRequestId;
+        if (quality === prevQuality) {
+            this.onlineQuality = quality;
+            syncKV.set('player.currentQuality', quality);
+            const state = this.audioController.playerState;
+            store.set(playerStateAtom, state === PlayerState.None ? PlayerState.Paused : state);
+            return true;
+        }
+        let sourceReplaced = false;
 
         try {
             store.set(playerStateAtom, PlayerState.Buffering);
 
             const fullItem = await musicSheet.getRawMusicItem(current.platform, current.id);
+            if (requestId !== this.playbackRequestId) return false;
             const musicItem = fullItem ?? (current as IMusic.IMusicItem);
 
             // 切换音质：仅在音质匹配时使用本地文件
@@ -492,23 +534,38 @@ class TrackPlayer {
                 requireQualityMatch: true,
             });
 
-            if (result?.url && this.isCurrentMusic(current)) {
-                this.audioController.setTrackSource(result, musicItem);
-                this.audioController.seekTo(currentTime);
-                if (wasPlaying) this.audioController.play();
-                store.set(qualityAtom, result.quality!);
-                syncKV.set('player.currentQuality', result.quality!);
-                return result.quality === quality;
+            if (requestId !== this.playbackRequestId) return false;
+            if (!result) throw new Error('No media source for requested quality');
+
+            // 解析期间旧源可能继续播放，用户也可能 seek/pause；提交时读取最新意图。
+            const currentTime = store.get(progressAtom).currentTime;
+            const wasPlaying = this.audioController.playerState === PlayerState.Playing;
+            sourceReplaced = true;
+            this.commitSource(result, musicItem);
+            this.audioController.seekTo(currentTime);
+            if (wasPlaying) {
+                this.audioController.play();
             } else {
-                // 切歌了或无结果，恢复原状态
-                store.set(qualityAtom, prevQuality);
-                store.set(playerStateAtom, wasPlaying ? PlayerState.Playing : PlayerState.Paused);
-                return false;
+                store.set(playerStateAtom, PlayerState.Paused);
             }
-        } catch {
-            // 切换失败，恢复原音质标记
+            if (!result.sourceInfo.isLocal) {
+                this.onlineQuality = quality;
+                syncKV.set('player.currentQuality', quality);
+            }
+            return !result.sourceInfo.isLocal && result.source.quality === quality;
+        } catch (error) {
+            if (requestId !== this.playbackRequestId) return false;
+            console.error('[TrackPlayer] Failed to change playback quality:', error);
             store.set(qualityAtom, prevQuality);
-            store.set(playerStateAtom, wasPlaying ? PlayerState.Playing : PlayerState.Paused);
+            if (sourceReplaced) {
+                // 原音源已卸载时不能宣称回滚后仍在播放。
+                this.audioController.reset();
+                store.set(sourceInfoAtom, null);
+                store.set(playerStateAtom, PlayerState.Paused);
+            } else {
+                const state = this.audioController.playerState;
+                store.set(playerStateAtom, state === PlayerState.None ? PlayerState.Paused : state);
+            }
             return false;
         }
     }
@@ -666,9 +723,7 @@ class TrackPlayer {
         this.resetProgress();
         this.consecutiveErrors++;
 
-        // 播放出错时重置音质为默认，避免因高音质源不可用导致连续失败
-        store.set(qualityAtom, 'standard');
-        syncKV.set('player.currentQuality', 'standard');
+        // 播放失败不改写用户在线偏好；源的档位回退仍由适配器按配置处理。
 
         const behavior = appConfig.getConfigByKey('playMusic.playError') ?? 'skip';
 
@@ -728,19 +783,22 @@ class TrackPlayer {
         const target = this.playQueue.getCurrentMusic();
         if (!target) return;
 
+        const requestId = ++this.playbackRequestId;
         store.set(playerStateAtom, PlayerState.Buffering);
         try {
             const fullItem = await musicSheet.getRawMusicItem(target.platform, target.id);
+            if (requestId !== this.playbackRequestId) return;
             const musicItem = fullItem ?? (target as IMusic.IMusicItem);
-            const result = await this.resolveSource(musicItem, store.get(qualityAtom));
+            const result = await this.resolveSource(musicItem, this.onlineQuality);
 
-            if (!result?.url) throw new Error('No media source');
-            if (!this.isCurrentMusic(target)) return; // 续播期间被切歌，放弃
+            if (requestId !== this.playbackRequestId) return;
+            if (!result) throw new Error('No media source');
 
-            this.audioController.setTrackSource(result, musicItem);
+            this.commitSource(result, musicItem);
             this.audioController.seekTo(seekTime);
             this.audioController.play();
         } catch (e) {
+            if (requestId !== this.playbackRequestId) return;
             await this.handlePlayError(target, e);
         }
     }
@@ -769,6 +827,7 @@ class TrackPlayer {
         this.audioController.reset();
         this.lyricManager.reset();
         store.set(currentMusicAtom, null);
+        store.set(sourceInfoAtom, null);
         store.set(playerStateAtom, PlayerState.None);
         this.resetProgress();
         syncKV.remove('player.currentMusic');
@@ -819,19 +878,26 @@ class TrackPlayer {
         return config === 'higher' ? 'higher' : 'lower';
     }
 
-    /**
-     * 解析音源：优先使用已下载的本地文件，否则调用插件获取。
-     */
+    /** 调用方校验请求编号后，同步提交音源及对应信息；此处不改在线偏好。 */
+    private commitSource(result: IResolvedPlaybackSource, musicItem: IMusic.IMusicItem): void {
+        store.set(sourceInfoAtom, result.sourceInfo);
+        if (!result.sourceInfo.isLocal) {
+            store.set(qualityAtom, result.source.quality ?? this.onlineQuality);
+        }
+        this.audioController.setTrackSource(result.source, musicItem);
+    }
+
+    /** 解析期间不修改 atom；以最终 URL 区分本地文件（包括下载缓存）和在线源。 */
     private async resolveSource(
         musicItem: IMusic.IMusicItem,
         quality: IMusic.IQualityKey,
         opts?: IResolveSourceOptions,
-    ): Promise<IPlugin.IMediaSourceResult | null> {
+    ): Promise<IResolvedPlaybackSource | null> {
         const localSource = await this.tryLocalSource(
             musicItem,
             opts?.requireQualityMatch ? quality : undefined,
         );
-        return (
+        const source =
             localSource ??
             (await pluginManager.adapters.getMediaSource({
                 hash: pluginManager.getPluginByPlatform(musicItem.platform)?.hash ?? '',
@@ -839,8 +905,22 @@ class TrackPlayer {
                 quality,
                 qualityOrder: QUALITY_KEYS,
                 qualityFallbackOrder: this.getQualityFallbackOrder(),
-            }))
-        );
+            }));
+        if (!source?.url) return null;
+
+        const sourceInfo: IPlaybackSourceInfo = { isLocal: /^file:/i.test(source.url) };
+        if (sourceInfo.isLocal) {
+            const filePath = fsUtil.fileUrlToPath(source.url);
+            sourceInfo.localPath = filePath;
+            try {
+                sourceInfo.audioFormat = await localMusic.getAudioInfo(filePath);
+            } catch (error) {
+                sourceInfo.metadataError =
+                    error instanceof Error ? error.message || String(error) : String(error);
+                console.error('[TrackPlayer] Failed to read local audio format:', filePath, error);
+            }
+        }
+        return { source: { ...source, quality: source.quality ?? quality }, sourceInfo };
     }
 }
 
