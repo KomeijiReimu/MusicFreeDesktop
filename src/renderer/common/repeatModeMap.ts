@@ -1,4 +1,4 @@
-import { Repeat, Repeat1, Shuffle, type LucideIcon } from 'lucide-react';
+import { Dices, Repeat, Repeat1, Shuffle, type LucideIcon } from 'lucide-react';
 import { RepeatMode, REPEAT_MODE_NEXT } from '@common/constant';
 
 export interface RepeatModeEntry {
@@ -6,6 +6,8 @@ export interface RepeatModeEntry {
     Icon: LucideIcon;
     /** 当前模式的提示文字 i18n key */
     tipKey: string;
+    /** 需要区分行为的模式说明。 */
+    descriptionKey?: string;
     /** 点击后切换到的下一个模式 */
     next: RepeatMode;
 }
@@ -20,7 +22,14 @@ export const REPEAT_MODE_MAP: Record<RepeatMode, RepeatModeEntry> = {
     [RepeatMode.Shuffle]: {
         Icon: Shuffle,
         tipKey: 'playback.repeat_shuffle',
+        descriptionKey: 'playback.repeat_shuffle_description',
         next: REPEAT_MODE_NEXT[RepeatMode.Shuffle],
+    },
+    [RepeatMode.Random]: {
+        Icon: Dices,
+        tipKey: 'playback.repeat_random',
+        descriptionKey: 'playback.repeat_random_description',
+        next: REPEAT_MODE_NEXT[RepeatMode.Random],
     },
     [RepeatMode.Loop]: {
         Icon: Repeat1,

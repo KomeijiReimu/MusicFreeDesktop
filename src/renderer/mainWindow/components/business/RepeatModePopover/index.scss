@@ -1,0 +1,93 @@
+.repeat-mode-popover {
+    position: relative;
+    flex-shrink: 0;
+    -webkit-app-region: no-drag;
+
+    &--fullscreen {
+        --repeat-mode-panel-bg: var(--color-bg-placeholder);
+    }
+
+    &__panel {
+        position: absolute;
+        bottom: calc(100% + var(--space-3));
+        left: 50%;
+        transform: translateX(-50%);
+        width: calc(var(--space-12) * 5);
+        max-width: calc(100vw - var(--space-8));
+        padding: var(--space-1) 0;
+        border: 1px solid var(--color-border-subtle);
+        border-radius: var(--radius-card);
+        background-color: var(--repeat-mode-panel-bg, var(--color-bg-modal));
+        box-shadow: var(--shadow-md);
+        z-index: var(--z-popover);
+
+        &::after {
+            content: '';
+            position: absolute;
+            // 与现有音质气泡沿用同一 10px 箭头尺寸。
+            bottom: -5px;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            transform: translateX(-50%) rotate(45deg);
+            background-color: var(--repeat-mode-panel-bg, var(--color-bg-modal));
+            border-right: 1px solid var(--color-border-subtle);
+            border-bottom: 1px solid var(--color-border-subtle);
+        }
+    }
+
+    &__option {
+        display: grid;
+        grid-template-columns: var(--space-4) minmax(0, 1fr) var(--space-4);
+        align-items: center;
+        gap: var(--space-2);
+        width: 100%;
+        padding: var(--space-2) var(--space-3);
+        border: none;
+        background: transparent;
+        color: var(--color-text-secondary);
+        text-align: left;
+        cursor: pointer;
+        transition: background-color var(--duration-fast) var(--ease-standard);
+
+        &:hover {
+            color: var(--color-text-primary);
+            background-color: var(--color-fill-neutral-hover);
+        }
+
+        &.is-active {
+            color: var(--color-text-brand);
+        }
+
+        &:focus-visible {
+            // 内嵌 2px 焦点环，避免超出气泡边缘。
+            outline: 2px solid var(--color-fill-brand);
+            outline-offset: -2px;
+        }
+    }
+
+    &__text {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-1);
+        min-width: 0;
+    }
+
+    &__label {
+        font-size: var(--text-label-size);
+        font-weight: var(--font-weight-medium);
+        line-height: var(--text-label-leading);
+    }
+
+    &__description {
+        font-size: var(--text-caption-size);
+        line-height: var(--text-caption-leading);
+        color: var(--color-text-secondary);
+    }
+
+    &__check {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+}

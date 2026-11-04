@@ -43,7 +43,13 @@ export default function App() {
 
     const isPlaying = playerState === PlayerState.Playing;
     const currentRepeatMode = repeatMode ?? RepeatMode.Queue;
-    const { Icon: RepeatIcon, next: nextRepeatMode } = REPEAT_MODE_MAP[currentRepeatMode];
+    const {
+        Icon: RepeatIcon,
+        next: nextRepeatMode,
+        tipKey,
+        descriptionKey,
+    } = REPEAT_MODE_MAP[currentRepeatMode];
+    const repeatTitle = descriptionKey ? `${t(tipKey)}\n${t(descriptionKey)}` : t(tipKey);
 
     // 进度百分比
     const progressPercent =
@@ -179,6 +185,8 @@ export default function App() {
                     <button
                         type="button"
                         className="l-minimode__util-btn"
+                        title={repeatTitle}
+                        aria-label={repeatTitle}
                         onClick={handleToggleRepeatMode}
                     >
                         <RepeatIcon size={14} />

@@ -18,10 +18,9 @@ import { FavoriteButton } from '../../business/FavoriteButton';
 import {
     useCurrentMusic,
     usePlayerState,
-    useRepeatMode,
     useProgress,
 } from '@renderer/mainWindow/core/trackPlayer/hooks';
-import { REPEAT_MODE_MAP } from '@renderer/common/repeatModeMap';
+import RepeatModePopover from '../../business/RepeatModePopover';
 import { ProgressBar } from '../../ui/ProgressBar';
 import { useProgressDrag } from '@renderer/mainWindow/hooks/useProgressDrag';
 import VolumePopover from '../PlayerBar/VolumePopover';
@@ -62,12 +61,9 @@ const PlaybackControls = memo(function PlaybackControls() {
     const { t } = useTranslation();
     const currentMusic = useCurrentMusic();
     const playerState = usePlayerState();
-    const repeatMode = useRepeatMode();
 
     const isPlaying = playerState === PlayerState.Playing;
     const hasMusic = currentMusic != null;
-
-    const { Icon: RepeatIcon, tipKey: repeatTipKey } = REPEAT_MODE_MAP[repeatMode];
 
     return (
         <div className="l-fullscreen-player__controls">
@@ -106,15 +102,11 @@ const PlaybackControls = memo(function PlaybackControls() {
                 >
                     <SkipForward size={22} fill="currentColor" />
                 </button>
-                <button
-                    className="l-fullscreen-player__ctrl-btn"
-                    type="button"
-                    title={t(repeatTipKey)}
-                    aria-label={t(repeatTipKey)}
-                    onClick={() => trackPlayer.toggleRepeatMode()}
-                >
-                    <RepeatIcon size={18} />
-                </button>
+                <RepeatModePopover
+                    buttonClassName="l-fullscreen-player__ctrl-btn"
+                    iconSize={18}
+                    fullscreen
+                />
             </div>
 
             {/* 进度条行 */}

@@ -12,12 +12,8 @@ import appConfig from '@infra/appConfig/renderer';
 import { useConfigValue } from '@renderer/common/hooks/useConfigValue';
 import { FavoriteButton } from '../../business/FavoriteButton';
 import { DownloadButton } from '../../business/DownloadButton';
-import {
-    useCurrentMusic,
-    usePlayerState,
-    useRepeatMode,
-} from '@renderer/mainWindow/core/trackPlayer/hooks';
-import { REPEAT_MODE_MAP } from '@renderer/common/repeatModeMap';
+import { useCurrentMusic, usePlayerState } from '@renderer/mainWindow/core/trackPlayer/hooks';
+import RepeatModePopover from '../../business/RepeatModePopover';
 import { Artwork } from '../../ui/Artwork';
 import { Marquee } from '../../ui/Marquee';
 import { toggleQueueDrawer } from '../QueueDrawer/queueDrawerState';
@@ -46,14 +42,11 @@ export default function PlayerBar() {
     const { t } = useTranslation();
     const currentMusic = useCurrentMusic();
     const playerState = usePlayerState();
-    const repeatMode = useRepeatMode();
 
     const [enableDesktopLyric] = useConfigValue('lyric.enableDesktopLyric');
 
     const isPlaying = playerState === PlayerState.Playing;
     const hasMusic = currentMusic != null;
-
-    const { Icon: RepeatIcon, tipKey: repeatTipKey } = REPEAT_MODE_MAP[repeatMode];
 
     return (
         <footer className="l-player-bar">
@@ -159,14 +152,7 @@ export default function PlayerBar() {
                     >
                         <SkipForward size={17} fill="currentColor" />
                     </button>
-                    <button
-                        className="l-player-bar__ctrl-btn"
-                        type="button"
-                        title={t(repeatTipKey)}
-                        onClick={() => trackPlayer.toggleRepeatMode()}
-                    >
-                        <RepeatIcon size={15} />
-                    </button>
+                    <RepeatModePopover buttonClassName="l-player-bar__ctrl-btn" iconSize={15} />
                 </div>
 
                 {/* ── 右侧: 工具 ── */}
