@@ -161,11 +161,15 @@ class TrackPlayer {
 
         // 4. 恢复当前歌曲
         if (savedMusic) {
-            store.set(currentMusicAtom, musicItemToSlim(savedMusic));
+            this.setCurrentMusic(savedMusic, false);
 
             // 获取完整数据并加载音源（不自动播放）
             const fullItem = await musicSheet.getRawMusicItem(savedMusic.platform, savedMusic.id);
             const musicItem = fullItem ?? savedMusic;
+
+            if (this.isCurrentMusic(savedMusic)) {
+                this.setCurrentMusic(musicItem);
+            }
 
             try {
                 // 优先使用已下载的本地文件，否则调用插件获取
@@ -179,9 +183,6 @@ class TrackPlayer {
             } catch {
                 // 恢复失败不阻塞启动
             }
-
-            // 加载歌词
-            this.lyricManager.fetchLyric(musicItem);
         }
 
         // 5. 绑定事件
@@ -697,7 +698,7 @@ class TrackPlayer {
     }
 
     /**
-     * 确认当前播放歌曲——更新 atom、持久化、加载歌词。
+     * 确认当前播放歌曲——更新 atom、系统媒体元数据、持久化、加载歌词。
      * @param fetchLyric 默认 true；元数据更新时传 false 避免重复加载
      */
     private setCurrentMusic(musicItem: IMusic.IMusicItem, fetchLyric = true): void {
@@ -707,6 +708,7 @@ class TrackPlayer {
             this.lastTruncationTime = 0;
         }
         store.set(currentMusicAtom, musicItemToSlim(musicItem));
+        this.audioController.updateMetadata(musicItem);
         syncKV.set('player.currentMusic', musicItem);
         if (fetchLyric) {
             this.lyricManager.fetchLyric(musicItem);

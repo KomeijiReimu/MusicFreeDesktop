@@ -34,6 +34,8 @@ export interface IAudioControllerEvents {
 export interface IAudioController extends EventEmitter<IAudioControllerEvents> {
     /** 预准备（设置 MediaSession metadata，清空旧音源） */
     prepareTrack(musicItem: IMusicItemSlim): void;
+    /** 更新系统媒体元数据，不中断播放 */
+    updateMetadata(musicItem: IMusic.IMusicItem | null): void;
     /** 设置音源并可选自动播放 */
     setTrackSource(source: IPlugin.IMediaSourceResult, musicItem: IMusic.IMusicItem): void;
     play(): void;
@@ -75,13 +77,19 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
         this.bindEvents();
     }
 
+    updateMetadata(musicItem: IMusic.IMusicItem | null): void {
+        navigator.mediaSession.metadata = musicItem
+            ? new MediaMetadata({
+                  title: musicItem.title,
+                  artist: musicItem.artist,
+                  album: musicItem.album ?? undefined,
+                  artwork: musicItem.artwork ? [{ src: musicItem.artwork }] : undefined,
+              })
+            : null;
+    }
+
     prepareTrack(musicItem: IMusicItemSlim): void {
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: musicItem.title,
-            artist: musicItem.artist,
-            album: musicItem.album ?? undefined,
-            artwork: musicItem.artwork ? [{ src: musicItem.artwork }] : undefined,
-        });
+        this.updateMetadata(musicItem);
         this.setPlayerState(PlayerState.None);
         this.audio.src = '';
         this.audio.removeAttribute('src');
@@ -184,7 +192,7 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
         this.revokeBlobUrl();
         this.audio.src = '';
         this.audio.removeAttribute('src');
-        navigator.mediaSession.metadata = null;
+        this.updateMetadata(null);
         navigator.mediaSession.playbackState = 'none';
     }
 
