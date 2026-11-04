@@ -52,7 +52,11 @@ const FullscreenPlayer = memo(function FullscreenPlayer() {
     useEffect(() => {
         if (!open) return;
         const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
+            if (
+                e.key === 'Escape' &&
+                !e.defaultPrevented &&
+                !document.querySelector('[role="dialog"][aria-modal="true"]')
+            ) {
                 e.stopPropagation();
                 closeFullscreenPlayer();
             }

@@ -1,7 +1,10 @@
 import type { ContextMenuEntry } from '../../ui/ContextMenu';
 import { showToast } from '../../ui/Toast';
 import { showModal } from '../../ui/Modal/modalManager';
+import { contextMenuAtom } from '../../ui/ContextMenu/contextMenuManager';
+import { getDefaultStore } from 'jotai';
 import trackPlayer from '@renderer/mainWindow/core/trackPlayer';
+import { currentMusicAtom, sourceInfoAtom } from '@renderer/mainWindow/core/trackPlayer/store';
 import {
     RECENTLY_PLAYED_ID,
     removeFromRecentlyPlayed,
@@ -13,6 +16,7 @@ import fsUtil from '@infra/fsUtil/renderer';
 import systemUtil from '@infra/systemUtil/renderer';
 import i18n from '@infra/i18n/renderer';
 import { LOCAL_PLUGIN_NAME } from '@common/constant';
+import { isSameMedia } from '@common/mediaKey';
 import { PLAY_QUEUE_SHEET_ID, DOWNLOADED_SHEET_ID } from '@infra/musicSheet/common/constant';
 import {
     Fingerprint,
@@ -25,6 +29,7 @@ import {
     Download,
     FolderOpen,
     PenLine,
+    Info,
 } from 'lucide-react';
 
 export interface MusicItemMenuContext {
@@ -166,6 +171,35 @@ export function MusicItemMenu(ctx: MusicItemMenuContext): ContextMenuEntry[] {
     if (isSingle) {
         const singleItem = items[0];
         const downloaded = downloadManager.isDownloaded(singleItem);
+        const store = getDefaultStore();
+        const currentMusic = store.get(currentMusicAtom);
+        const sourceInfo = store.get(sourceInfoAtom);
+
+        // 保留用户选中的文件；只有同一媒体 key 才可采用当前实际播放源。
+        let filePath: string | undefined;
+        if (typeof singleItem.localPath === 'string' && singleItem.localPath) {
+            filePath = singleItem.localPath;
+        } else if (singleItem.url?.startsWith('file:')) {
+            filePath = fsUtil.fileUrlToPath(singleItem.url);
+        } else if (sourceInfo?.isLocal && isSameMedia(singleItem, currentMusic)) {
+            filePath = sourceInfo.localPath;
+        }
+
+        // 已知本地平台的 slim 条目可在弹窗内查 raw；纯在线条目不提供此入口。
+        if (filePath || downloaded?.path || singleItem.platform === LOCAL_PLUGIN_NAME) {
+            entries.push({
+                id: 'song-info',
+                icon: <Info />,
+                label: i18n.t('media.song_info'),
+                onClick: () => {
+                    showModal('MusicInfoModal', {
+                        musicItem: singleItem,
+                        filePath,
+                        returnFocusTo: store.get(contextMenuAtom)?.returnFocusTo,
+                    });
+                },
+            });
+        }
 
         const isLocal = downloaded?.path || singleItem.platform === LOCAL_PLUGIN_NAME;
 

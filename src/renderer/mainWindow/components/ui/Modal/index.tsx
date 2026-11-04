@@ -1,4 +1,4 @@
-import { type ReactNode, type MouseEvent, useEffect, useCallback } from 'react';
+import { type ReactNode, type MouseEvent, useEffect, useCallback, useId, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -33,6 +33,10 @@ export interface ModalProps {
     children?: ReactNode;
     /** 底部操作区 */
     footer?: ReactNode;
+    /** 将初始焦点和 Tab 范围限制在弹窗内，关闭时返回原焦点。 */
+    manageFocus?: boolean;
+    /** 打开弹窗前的操作元素；菜单项卸载后仍可返回菜单的来源。 */
+    returnFocusTo?: HTMLElement | null;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -75,15 +79,41 @@ export default function Modal({
     closable = true,
     children,
     footer,
+    manageFocus = false,
+    returnFocusTo,
 }: ModalProps) {
+    const panelRef = useRef<HTMLDivElement>(null);
+    const titleId = useId();
+    const subtitleId = useId();
+
+    useEffect(() => {
+        if (!open || !manageFocus) return;
+        const panel = panelRef.current;
+        const previousFocus =
+            returnFocusTo ??
+            (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+        panel?.focus({ preventScroll: true });
+
+        return () => {
+            const anotherModal = Array.from(
+                document.querySelectorAll<HTMLElement>('.modal[role="dialog"]'),
+            ).some((element) => element !== panel);
+            if (!anotherModal && previousFocus?.isConnected) {
+                previousFocus.focus({ preventScroll: true });
+            }
+        };
+    }, [open, manageFocus, returnFocusTo]);
+
     // ── Escape key ──
     useEffect(() => {
         if (!open || !closeOnEscape) return;
         const handler = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                e.stopPropagation();
-                onClose();
-            }
+            if (e.key !== 'Escape' || e.defaultPrevented) return;
+            const panels = document.querySelectorAll<HTMLElement>('.modal[role="dialog"]');
+            if (panels[panels.length - 1] !== panelRef.current) return;
+            e.preventDefault();
+            e.stopPropagation();
+            onClose();
         };
         window.addEventListener('keydown', handler);
         return () => window.removeEventListener('keydown', handler);
@@ -119,9 +149,37 @@ export default function Modal({
                         onClick={handleBackdropClick}
                     >
                         <motion.div
+                            ref={panelRef}
                             className={cn('modal', `modal--${size}`)}
                             role="dialog"
                             aria-modal="true"
+                            aria-labelledby={title ? titleId : undefined}
+                            aria-describedby={subtitle ? subtitleId : undefined}
+                            tabIndex={manageFocus ? -1 : undefined}
+                            onKeyDown={(e) => {
+                                if (!manageFocus || e.key !== 'Tab' || e.defaultPrevented) return;
+                                const focusable = Array.from(
+                                    e.currentTarget.querySelectorAll<HTMLElement>(
+                                        'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex="-1"])',
+                                    ),
+                                ).filter((element) => element.getClientRects().length > 0);
+                                const first = focusable[0];
+                                const last = focusable[focusable.length - 1];
+                                if (!first) {
+                                    e.preventDefault();
+                                    e.currentTarget.focus();
+                                } else if (
+                                    e.shiftKey &&
+                                    (document.activeElement === first ||
+                                        document.activeElement === e.currentTarget)
+                                ) {
+                                    e.preventDefault();
+                                    last.focus();
+                                } else if (!e.shiftKey && document.activeElement === last) {
+                                    e.preventDefault();
+                                    first.focus();
+                                }
+                            }}
                             variants={panelVariants}
                             initial="hidden"
                             animate="visible"
@@ -132,9 +190,15 @@ export default function Modal({
                             {hasHeader && (
                                 <div className="modal__header">
                                     <div className="modal__titles">
-                                        {title && <div className="modal__title">{title}</div>}
+                                        {title && (
+                                            <div id={titleId} className="modal__title">
+                                                {title}
+                                            </div>
+                                        )}
                                         {subtitle && (
-                                            <div className="modal__subtitle">{subtitle}</div>
+                                            <div id={subtitleId} className="modal__subtitle">
+                                                {subtitle}
+                                            </div>
                                         )}
                                     </div>
                                     {closable && (

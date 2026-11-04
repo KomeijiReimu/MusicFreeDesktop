@@ -52,6 +52,8 @@ export interface ContextMenuState {
     position: ContextMenuPosition;
     /** 传给模板函数的上下文参数 */
     context: any;
+    /** 菜单打开前的焦点，供菜单后续打开的弹窗返回。 */
+    returnFocusTo?: HTMLElement | null;
 }
 
 export const contextMenuAtom = atom(null as ContextMenuState | null);
@@ -85,6 +87,8 @@ export function showContextMenu<K extends MenuName>(
         name: name as string,
         position,
         context: context[0],
+        returnFocusTo:
+            document.activeElement instanceof HTMLElement ? document.activeElement : null,
     };
     store.set(contextMenuAtom, state);
 }
