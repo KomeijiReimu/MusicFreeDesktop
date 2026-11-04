@@ -90,3 +90,13 @@ typings/
 
 # Electron-Forge
 out/
+
+# Local agent tooling
+.cortexkit/
+.slim/
+.codegraph/
+.tokpulse/
+.tokpulse-writer-locks/
+.tokpulse-migrate-*/
+.opencode/oc-tps/
+.ignore
