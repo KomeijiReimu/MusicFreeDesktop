@@ -93,7 +93,7 @@ function harness(random = () => 0) {
         '@infra/pluginManager/renderer': {
             callPluginMethod: async () => {
                 if (env.enrichmentError) throw env.enrichmentError;
-                return null;
+                return env.musicInfoPromise ?? null;
             },
             getPluginByPlatform: () => ({ hash: 'mock' }),
             adapters: {
@@ -214,7 +214,9 @@ function harness(random = () => 0) {
             setVolume() {},
             setSpeed() {},
             setSinkId: async () => {},
-            updateMetadata() {},
+            updateMetadata(item) {
+                this.metadata = item;
+            },
             reset() {
                 this.hasSource = false;
                 this.playerState = env.constants.PlayerState.None;
@@ -585,6 +587,53 @@ test('Quality: restored local files cannot change online preference or reload vi
     assert.equal(env.syncKV.get('player.currentQuality'), 'high');
     player.reset();
     assert.equal(env.store.get(env.atoms.sourceInfoAtom), null);
+});
+
+test('Metadata: restored local playback receives its cover without reloading, seeking or autoplay', async () => {
+    const env = harness();
+    env.db = [a];
+    env.syncKV.set('player.currentMusic', a);
+    env.syncKV.set('player.currentProgress', 37);
+    env.mediaSource = { url: 'file:///music/restored.flac' };
+    const info = deferred();
+    env.musicInfoPromise = info.promise;
+    const { player, audio } = env.player({ resolveSources: true });
+    const enrich = player.enrichCurrentMusic.bind(player);
+    let enrichment;
+    player.enrichCurrentMusic = (...args) => {
+        enrichment = enrich(...args);
+        return enrichment;
+    };
+    await player.setup();
+    assert.ok(enrichment);
+    assert.equal(audio.sources.length, 1);
+    assert.deepEqual(audio.seeks, [37]);
+    assert.equal(audio.plays, 0);
+    const progress = env.store.get(env.atoms.progressAtom);
+    const sourceInfo = env.store.get(env.atoms.sourceInfoAtom);
+    info.resolve({
+        artwork: 'data:image/png;base64,cover',
+        title: 'With cover',
+        platform: 'wrong',
+        id: 'wrong',
+    });
+    await enrichment;
+    const current = env.store.get(env.atoms.currentMusicAtom);
+    assert.equal(current.artwork, 'data:image/png;base64,cover');
+    assert.equal(current.title, 'With cover');
+    assert.equal(current.platform, a.platform);
+    assert.equal(current.id, a.id);
+    assert.equal(audio.metadata.artwork, current.artwork);
+    assert.equal(audio.sources.length, 1);
+    assert.deepEqual(audio.seeks, [37]);
+    assert.equal(audio.plays, 0);
+    assert.equal(env.store.get(env.atoms.progressAtom), progress);
+    assert.equal(env.store.get(env.atoms.sourceInfoAtom), sourceInfo);
+    assert.equal(env.store.get(env.atoms.playerStateAtom), env.constants.PlayerState.Paused);
+    player.resume();
+    assert.equal(audio.plays, 1);
+    assert.equal(audio.sources.length, 1);
+    assert.deepEqual(audio.seeks, [37]);
 });
 
 test('Quality: online replacement uses the latest seek/pause state and commits matching source info', async () => {

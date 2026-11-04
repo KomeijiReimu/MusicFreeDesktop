@@ -189,6 +189,7 @@ class TrackPlayer {
 
             if (requestId === this.playbackRequestId && this.isCurrentMusic(savedMusic)) {
                 this.setCurrentMusic(musicItem);
+                void this.enrichCurrentMusic(musicItem, requestId);
             }
 
             try {
@@ -320,27 +321,7 @@ class TrackPlayer {
             // 记录到最近播放（异步，不阻塞播放）
             addToRecentlyPlayed(musicItem).catch(() => {});
 
-            // 异步丰富元数据（锦上添花，失败不影响播放）
-            pluginManager
-                .callPluginMethod({
-                    platform: musicItem.platform,
-                    method: 'getMusicInfo',
-                    args: [musicItem],
-                })
-                .then((info) => {
-                    if (info && typeof info === 'object' && requestId === this.playbackRequestId) {
-                        const enriched = {
-                            ...musicItem,
-                            ...info,
-                            platform: musicItem.platform,
-                            id: musicItem.id,
-                        };
-                        this.setCurrentMusic(enriched, false);
-                    }
-                })
-                .catch((error) => {
-                    console.error('[TrackPlayer] Failed to enrich music metadata:', error);
-                });
+            void this.enrichCurrentMusic(musicItem, requestId);
         } catch (e) {
             if (requestId !== this.playbackRequestId) return;
             this.audioController.reset();
@@ -800,6 +781,33 @@ class TrackPlayer {
         } catch (e) {
             if (requestId !== this.playbackRequestId) return;
             await this.handlePlayError(target, e);
+        }
+    }
+
+    /** 恢复和播放共用元数据补全，不等待结果、不改动音源或进度。 */
+    private async enrichCurrentMusic(
+        musicItem: IMusic.IMusicItem,
+        requestId: number,
+    ): Promise<void> {
+        try {
+            const info = await pluginManager.callPluginMethod({
+                platform: musicItem.platform,
+                method: 'getMusicInfo',
+                args: [musicItem],
+            });
+            if (info && typeof info === 'object' && requestId === this.playbackRequestId) {
+                this.setCurrentMusic(
+                    {
+                        ...musicItem,
+                        ...info,
+                        platform: musicItem.platform,
+                        id: musicItem.id,
+                    },
+                    false,
+                );
+            }
+        } catch (error) {
+            console.error('[TrackPlayer] Failed to enrich music metadata:', error);
         }
     }
 
