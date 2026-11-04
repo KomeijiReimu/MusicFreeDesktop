@@ -190,6 +190,33 @@
                 0 0 0 var(--focus-ring-offset) var(--color-bg-base),
                 var(--focus-ring);
         }
+
+        &.is-readonly {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-1);
+            min-width: 0;
+            max-width: calc(var(--space-10) * 3);
+            flex-shrink: 1;
+            color: var(--color-text-primary);
+            cursor: default;
+        }
+
+        &.is-readonly:hover {
+            border-color: var(--color-border-default);
+        }
+    }
+
+    &__quality-codec {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    &__quality-detail {
+        flex-shrink: 0;
+        white-space: nowrap;
     }
 
     // ── 气泡面板（倍速 / 音质共用；音量样式见 VolumePopover.scss） ──
@@ -268,6 +295,11 @@
             min-width: 72px;
             padding: var(--space-1-5) 0;
             gap: 0;
+            visibility: hidden;
+        }
+
+        &--list.is-visible {
+            visibility: visible;
         }
     }
 

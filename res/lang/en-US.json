@@ -634,6 +634,10 @@
         "metadata_format_hint": "{{ext}} format does not support embedded tags. Changes are only saved to the database"
     },
     "quality": {
+        "no_source": "No quality information available",
+        "local_fixed": "Local files have fixed audio quality",
+        "lossless": "Lossless",
+        "read_failed": "Read failed",
         "switch": "Change Quality",
         "unavailable": "This quality is not available",
         "low": "Low",

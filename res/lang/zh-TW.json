@@ -634,6 +634,10 @@
         "metadata_format_hint": "{{ext}} 格式不支援寫入嵌入式標籤，修改僅儲存至資料庫"
     },
     "quality": {
+        "no_source": "暫無音質資訊",
+        "local_fixed": "本地檔案音質固定",
+        "lossless": "無損",
+        "read_failed": "讀取失敗",
         "switch": "選擇音樂音質",
         "unavailable": "暫無此音質歌曲",
         "low": "低音質",
