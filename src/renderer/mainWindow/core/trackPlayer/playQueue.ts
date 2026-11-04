@@ -13,23 +13,36 @@ import MutationQueue from '@common/mutationQueue';
 import { syncKV } from '@renderer/common/kvStore';
 import { playQueueBridge } from '@infra/musicSheet/renderer';
 import { store, musicQueueAtom } from './store';
+import type { IShuffleSnapshot } from './types';
+
+const SHUFFLE_STORAGE_KEY = 'player.shuffleOrder';
+const RANDOM_HISTORY_LIMIT = 200;
 
 // ─── PlayQueue ───
 
 class PlayQueue {
-    /** 内存中的 slim 列表（用于 UI 渲染） */
+    /** 数据库原始队列顺序；Shuffle 只重排展示和导航，不重排此列表。 */
     private slimList: IMusicItemSlim[] = [];
     private indexMap: IIndexMap = createIndexMap([]);
+    private displayList: IMusicItemSlim[] = [];
+    private displayIndexMap: IIndexMap = createIndexMap([]);
     private currentIndex = -1;
     private mutationQueue = new MutationQueue();
 
-    // ─── Shuffle 状态（虚拟导航，纯内存，不持久化） ───
+    // ─── Shuffle：持久化无放回排列及游标 ───
     private shuffleKeys: string[] = [];
     private shufflePosition = -1;
     private _isShuffleActive = false;
     private keyToIndex = new Map<string, number>();
 
-    constructor() {
+    // ─── Random：允许重复的实际播放历史（最多 200 项） ───
+    private _isRandomActive = false;
+    private randomHistory: string[] = [];
+    private randomPosition = -1;
+    private priorityKeys: string[] = [];
+    private randomNavigation: { key: string; cursor: number | null } | null = null;
+
+    constructor(private readonly random: () => number = Math.random) {
         this.mutationQueue.onError(() => {
             // 持久化失败时从主进程重新加载
             this.reloadFromDB();
@@ -39,7 +52,7 @@ class PlayQueue {
     // ─── 读取 ───
 
     get queue(): IMusicItemSlim[] {
-        return this.slimList;
+        return this.displayList;
     }
 
     get isEmpty(): boolean {
@@ -47,7 +60,8 @@ class PlayQueue {
     }
 
     getCurrentIndex(): number {
-        return this.currentIndex;
+        const current = this.getCurrentMusic();
+        return current ? this.displayIndexMap.indexOf(current) : -1;
     }
 
     getCurrentMusic(): IMusicItemSlim | null {
@@ -56,6 +70,10 @@ class PlayQueue {
 
     get isShuffleActive(): boolean {
         return this._isShuffleActive;
+    }
+
+    get isRandomActive(): boolean {
+        return this._isRandomActive;
     }
 
     // ─── 初始化（启动恢复） ───
@@ -83,15 +101,18 @@ class PlayQueue {
         items: (IMusic.IMusicItem | IMusicItemSlim)[],
         options?: { playIndex?: number; fromSheetId?: string },
     ): void {
-        const slims = items.map(musicItemToSlim);
+        const uniqueItems = [...new Map(items.map((item) => [this.keyOf(item), item])).values()];
+        const slims = uniqueItems.map(musicItemToSlim);
         this.slimList = slims;
         this.rebuildIndexMap();
-        this.currentIndex = options?.playIndex ?? -1;
+        const startItem = items[options?.playIndex ?? -1];
+        this.currentIndex = startItem ? this.indexMap.indexOf(startItem) : -1;
+        this.resetRandomHistory();
         if (this._isShuffleActive) this.regenerateShuffleOrder();
         this.syncAtom();
 
         this.mutationQueue.enqueue(() =>
-            playQueueBridge.set(items as IMusic.IMusicItem[], options?.fromSheetId),
+            playQueueBridge.set(uniqueItems as IMusic.IMusicItem[], options?.fromSheetId),
         );
     }
 
@@ -108,8 +129,11 @@ class PlayQueue {
         // 单次遍历：过滤当前播放歌曲，同时保留对应 items 索引
         const filteredSlims: IMusicItemSlim[] = [];
         const filteredItems: IMusic.IMusicItem[] = [];
+        const seen = new Set<string>();
         for (let i = 0; i < slims.length; i++) {
-            if (currentKey && this.keyOf(slims[i]) === currentKey) continue;
+            const key = this.keyOf(slims[i]);
+            if ((!this._isRandomActive && key === currentKey) || seen.has(key)) continue;
+            seen.add(key);
             filteredSlims.push(slims[i]);
             filteredItems.push(items[i] as IMusic.IMusicItem);
         }
@@ -141,13 +165,29 @@ class PlayQueue {
             this.shuffleKeys.splice(this.shufflePosition + 1, 0, ...newKeys);
         }
 
+        if (this._isRandomActive) {
+            this.priorityKeys = [
+                ...filteredSlims.map((item) => this.keyOf(item)),
+                ...this.priorityKeys.filter((key) => !removeSet.has(key)),
+            ];
+        }
+
         this.syncAtom();
         this.mutationQueue.enqueue(() => playQueueBridge.add(filteredItems, insertPos));
     }
 
     /** 追加到队尾 */
     append(items: (IMusic.IMusicItem | IMusicItemSlim)[]): void {
-        const slims = items.map(musicItemToSlim);
+        const seen = new Set(this.slimList.map((item) => this.keyOf(item)));
+        const added = items.filter((item) => {
+            const key = this.keyOf(item);
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+        if (added.length === 0) return;
+        const slims = added.map(musicItemToSlim);
+        const insertPos = this.slimList.length;
         this.slimList = [...this.slimList, ...slims];
         this.rebuildIndexMap();
         if (this._isShuffleActive) {
@@ -157,7 +197,7 @@ class PlayQueue {
 
         // afterIndex 超出范围时主进程自动 append
         this.mutationQueue.enqueue(() =>
-            playQueueBridge.add(items as IMusic.IMusicItem[], this.slimList.length),
+            playQueueBridge.add(added as IMusic.IMusicItem[], insertPos),
         );
     }
 
@@ -177,14 +217,20 @@ class PlayQueue {
         }
 
         if (this._isShuffleActive) {
+            const precedingKeys = this.shuffleKeys.slice(
+                0,
+                this.shufflePosition + (currentMusic ? 0 : 1),
+            );
             this.shuffleKeys = this.shuffleKeys.filter((k) => !removeSet.has(k));
             if (this.currentIndex >= 0) {
                 const key = this.keyOf(this.slimList[this.currentIndex]);
                 this.shufflePosition = this.shuffleKeys.indexOf(key);
             } else {
-                this.shufflePosition = -1;
+                this.shufflePosition =
+                    precedingKeys.filter((key) => !removeSet.has(key)).length - 1;
             }
         }
+        this.pruneRandomHistory();
         this.syncAtom();
 
         this.mutationQueue.enqueue(() => playQueueBridge.remove(bases));
@@ -196,6 +242,7 @@ class PlayQueue {
         this.currentIndex = -1;
         this.shuffleKeys = [];
         this.shufflePosition = -1;
+        this.resetRandomHistory();
         this.rebuildIndexMap();
         this.syncAtom();
 
@@ -204,44 +251,98 @@ class PlayQueue {
 
     // ─── 导航 ───
 
+    /** 所有公开 index 都对应 queue / musicQueueAtom 的展示顺序。 */
     setCurrentIndex(index: number): void {
-        this.currentIndex = index;
-        if (this._isShuffleActive && index >= 0 && index < this.slimList.length) {
-            const key = this.keyOf(this.slimList[index]);
+        const item = this.displayList[index];
+        this.currentIndex = item ? this.indexMap.indexOf(item) : -1;
+        if (!item) return;
+        const key = this.keyOf(item);
+        if (this._isShuffleActive) {
             const pos = this.shuffleKeys.indexOf(key);
             if (pos !== -1) this.shufflePosition = pos;
+            this.saveShuffleOrder();
+        }
+        if (this._isRandomActive) {
+            const navigation = this.randomNavigation;
+            if (navigation?.key === key && navigation.cursor !== null) {
+                this.randomPosition = navigation.cursor;
+            } else if (navigation?.key === key || this.randomHistory[this.randomPosition] !== key) {
+                this.randomHistory = this.randomHistory.slice(0, this.randomPosition + 1);
+                this.randomHistory.push(key);
+                this.randomHistory = this.randomHistory.slice(-RANDOM_HISTORY_LIMIT);
+                this.randomPosition = this.randomHistory.length - 1;
+            }
+            this.priorityKeys = this.priorityKeys.filter((priorityKey) => priorityKey !== key);
+            this.randomNavigation = null;
         }
     }
 
-    getNextIndex(): number {
+    /** exclude 仅用于失败跳过；正常 Random 不排除当前曲目。 */
+    getNextIndex(exclude?: IMedia.IMediaBase): number {
         if (this.isEmpty) return -1;
+        if (this._isRandomActive) {
+            const excludedKey = exclude ? this.keyOf(exclude) : null;
+            const priority = this.priorityKeys.find((key) => key !== excludedKey);
+            if (priority) {
+                this.randomNavigation = { key: priority, cursor: null };
+                return this.indexOfKey(priority);
+            }
+            for (
+                let cursor = this.randomPosition + 1;
+                cursor < this.randomHistory.length;
+                cursor++
+            ) {
+                const key = this.randomHistory[cursor];
+                if (key === excludedKey) continue;
+                this.randomNavigation = { key, cursor };
+                return this.indexOfKey(key);
+            }
+            const candidates = excludedKey
+                ? this.slimList.filter((item) => this.keyOf(item) !== excludedKey)
+                : this.slimList;
+            if (candidates.length === 0) return -1;
+            const key = this.keyOf(candidates[Math.floor(this.random() * candidates.length)]);
+            this.randomNavigation = { key, cursor: null };
+            return this.indexOfKey(key);
+        }
         if (this._isShuffleActive && this.shuffleKeys.length > 0) {
-            const nextPos = (this.shufflePosition + 1) % this.shuffleKeys.length;
-            return this.indexOfKey(this.shuffleKeys[nextPos]);
+            return (this.shufflePosition + 1) % this.shuffleKeys.length;
         }
         return (this.currentIndex + 1) % this.slimList.length;
     }
 
     getPrevIndex(): number {
         if (this.isEmpty) return -1;
+        if (this._isRandomActive) {
+            const cursor = this.randomPosition - 1;
+            if (cursor < 0) return -1;
+            const key = this.randomHistory[cursor];
+            this.randomNavigation = { key, cursor };
+            return this.indexOfKey(key);
+        }
         if (this._isShuffleActive && this.shuffleKeys.length > 0) {
+            if (this.shufflePosition < 0) return this.shuffleKeys.length - 1;
             const prevPos =
                 (this.shufflePosition - 1 + this.shuffleKeys.length) % this.shuffleKeys.length;
-            return this.indexOfKey(this.shuffleKeys[prevPos]);
+            return prevPos;
         }
-        return (this.currentIndex - 1 + this.slimList.length) % this.slimList.length;
+        return this.currentIndex < 0
+            ? this.slimList.length - 1
+            : (this.currentIndex - 1 + this.slimList.length) % this.slimList.length;
     }
 
     findIndex(item: IMedia.IMediaBase): number {
-        return this.indexMap.indexOf(item);
+        return this.displayIndexMap.indexOf(item);
     }
 
     // ─── Shuffle（虚拟导航） ───
 
     /** 进入 Shuffle 模式：生成随机导航序列，当前歌曲置首 */
-    enterShuffle(): void {
+    enterShuffle(restore = false): void {
+        this.exitRandom();
         this._isShuffleActive = true;
-        this.regenerateShuffleOrder();
+        if (!restore || !this.restoreShuffleOrder()) this.regenerateShuffleOrder();
+        this.syncAtom();
     }
 
     /** 退出 Shuffle 模式：清空导航序列 */
@@ -249,6 +350,19 @@ class PlayQueue {
         this.shuffleKeys = [];
         this.shufflePosition = -1;
         this._isShuffleActive = false;
+        localStorage.removeItem(SHUFFLE_STORAGE_KEY);
+        this.syncAtom();
+    }
+
+    enterRandom(): void {
+        if (this._isShuffleActive) this.exitShuffle();
+        this._isRandomActive = true;
+        this.resetRandomHistory();
+    }
+
+    exitRandom(): void {
+        this._isRandomActive = false;
+        this.resetRandomHistory();
     }
 
     // ─── 内部方法 ───
@@ -285,7 +399,7 @@ class PlayQueue {
 
         // Fisher-Yates in-place shuffle
         for (let i = rest.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
+            const j = Math.floor(this.random() * (i + 1));
             [rest[i], rest[j]] = [rest[j], rest[i]];
         }
 
@@ -299,14 +413,77 @@ class PlayQueue {
      *   仅在 reloadFromDB 等无法提前捕获的场景传 undefined，此时回退到 localStorage。
      */
     private fixCurrentIndex(currentMusic?: IMusicItemSlim | null): void {
-        const target = currentMusic ?? syncKV.get('player.currentMusic');
-        if (target) {
-            this.currentIndex = this.indexMap.indexOf(target);
-        }
+        const target =
+            currentMusic === undefined ? syncKV.get('player.currentMusic') : currentMusic;
+        this.currentIndex = target ? this.indexMap.indexOf(target) : -1;
     }
 
     private syncAtom(): void {
-        store.set(musicQueueAtom, this.slimList);
+        this.displayList = this._isShuffleActive
+            ? this.shuffleKeys.map((key) => this.slimList[this.indexOfKey(key)])
+            : this.slimList;
+        this.displayIndexMap = createIndexMap(this.displayList);
+        store.set(musicQueueAtom, this.displayList);
+        if (this._isShuffleActive) this.saveShuffleOrder();
+    }
+
+    private resetRandomHistory(): void {
+        const current = this.getCurrentMusic();
+        this.randomHistory = this._isRandomActive && current ? [this.keyOf(current)] : [];
+        this.randomPosition = this.randomHistory.length - 1;
+        this.priorityKeys = [];
+        this.randomNavigation = null;
+    }
+
+    private pruneRandomHistory(): void {
+        const preceding = this.randomHistory.slice(0, this.randomPosition + 1);
+        this.randomHistory = this.randomHistory.filter((key) => this.keyToIndex.has(key));
+        this.randomPosition = preceding.filter((key) => this.keyToIndex.has(key)).length - 1;
+        this.priorityKeys = this.priorityKeys.filter((key) => this.keyToIndex.has(key));
+        this.randomNavigation = null;
+    }
+
+    private saveShuffleOrder(): void {
+        if (this.isEmpty) {
+            localStorage.removeItem(SHUFFLE_STORAGE_KEY);
+            return;
+        }
+        const snapshot: IShuffleSnapshot = {
+            version: 1,
+            keys: this.shuffleKeys,
+            cursor: this.shufflePosition,
+        };
+        localStorage.setItem(SHUFFLE_STORAGE_KEY, JSON.stringify(snapshot));
+    }
+
+    /** 持久化数据只在入口校验一次，再按当前数据库媒体 key 对齐。 */
+    private restoreShuffleOrder(): boolean {
+        const raw = localStorage.getItem(SHUFFLE_STORAGE_KEY);
+        if (!raw) return false;
+        let saved: IShuffleSnapshot;
+        try {
+            saved = JSON.parse(raw);
+        } catch {
+            return false;
+        }
+        if (
+            !saved ||
+            saved.version !== 1 ||
+            !Array.isArray(saved.keys) ||
+            !saved.keys.every((key) => typeof key === 'string') ||
+            !Number.isInteger(saved.cursor) ||
+            saved.cursor < -1 ||
+            saved.cursor >= saved.keys.length
+        )
+            return false;
+
+        const keys = new Set(saved.keys.filter((key) => this.keyToIndex.has(key)));
+        for (const item of this.slimList) keys.add(this.keyOf(item));
+        this.shuffleKeys = [...keys];
+        const current = this.getCurrentMusic();
+        // 当前歌曲为准；数据库重排/删歌后不能把旧 cursor 当成新的歌曲位置。
+        this.shufflePosition = current ? this.shuffleKeys.indexOf(this.keyOf(current)) : -1;
+        return true;
     }
 
     private async reloadFromDB(): Promise<void> {
@@ -314,10 +491,13 @@ class PlayQueue {
             this.slimList = await playQueueBridge.getAll();
             this.rebuildIndexMap();
             this.fixCurrentIndex();
-            if (this._isShuffleActive) this.regenerateShuffleOrder();
+            if (this._isShuffleActive) {
+                if (!this.restoreShuffleOrder()) this.regenerateShuffleOrder();
+            }
+            this.pruneRandomHistory();
             this.syncAtom();
-        } catch {
-            // 静默失败，下次操作会重试
+        } catch (error) {
+            console.error('[PlayQueue] Failed to reload queue after persistence error:', error);
         }
     }
 }

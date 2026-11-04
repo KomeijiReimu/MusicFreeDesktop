@@ -19,18 +19,21 @@ export enum PlayerState {
 
 /** 播放模式 */
 export enum RepeatMode {
-    /** 随机 */
+    /** 无放回乱序 */
     Shuffle = 'shuffle',
+    /** 每次随机抽取，允许连续播放同一首 */
+    Random = 'random',
     /** 播放队列 */
     Queue = 'queue-repeat',
     /** 单曲循环 */
     Loop = 'loop',
 }
 
-/** RepeatMode 循环切换顺序：Queue → Shuffle → Loop → Queue */
+/** RepeatMode 循环切换顺序：Queue → Shuffle → Random → Loop → Queue */
 export const REPEAT_MODE_NEXT: Record<RepeatMode, RepeatMode> = {
     [RepeatMode.Queue]: RepeatMode.Shuffle,
-    [RepeatMode.Shuffle]: RepeatMode.Loop,
+    [RepeatMode.Shuffle]: RepeatMode.Random,
+    [RepeatMode.Random]: RepeatMode.Loop,
     [RepeatMode.Loop]: RepeatMode.Queue,
 };
 
