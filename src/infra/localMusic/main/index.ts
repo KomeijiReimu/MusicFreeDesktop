@@ -233,11 +233,29 @@ class LocalMusicManager {
                           title: string;
                           artist: string;
                           album: string;
+                          audioFormat: string | null;
+                          formatSize: number | null;
+                          formatMtime: number | null;
                       }
                     | undefined;
+                let format = meta.format;
+                if (
+                    row?.audioFormat &&
+                    row.formatSize === meta.fileSize &&
+                    row.formatMtime === meta.fileMtime
+                ) {
+                    // 详情不补算时长，保留同一文件此前由扫描读出的已知字段。
+                    const stored = JSON.parse(row.audioFormat) as IAudioFormat;
+                    format = {
+                        ...stored,
+                        ...Object.fromEntries(
+                            Object.entries(meta.format).filter(([, value]) => value !== undefined),
+                        ),
+                    };
+                }
                 this.queries.updateAudioFormat.run({
                     filePath,
-                    audioFormat: JSON.stringify(meta.format),
+                    audioFormat: JSON.stringify(format),
                     fileSize: meta.fileSize,
                     fileMtime: meta.fileMtime,
                 });
@@ -245,7 +263,7 @@ class LocalMusicManager {
                     filePath,
                     fileSize: meta.fileSize,
                     fileMtime: meta.fileMtime,
-                    format: meta.format,
+                    format,
                     common: meta.common,
                     native: meta.native,
                     artwork: meta.artwork,
