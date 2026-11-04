@@ -114,6 +114,8 @@ class TrackPlayer {
     private playQueue!: PlayQueue;
     private lyricManager!: LyricManager;
     private playbackRequestId = 0;
+    /** 用户的播放意图独立于音源是否已就绪；暂停不取消仍可挂载的当前源。 */
+    private playRequested = false;
     /** 在线请求偏好独立于当前源的实际音质；本地文件和在线降级不会覆盖它。 */
     private onlineQuality: IMusic.IQualityKey = 'standard';
 
@@ -136,6 +138,7 @@ class TrackPlayer {
     // ─── 启动恢复 ───
 
     async setup(): Promise<void> {
+        this.playRequested = false;
         // 1. 创建子模块
         this.audioController = createAudioController('web-audio');
         this.playQueue = new PlayQueue();
@@ -189,7 +192,9 @@ class TrackPlayer {
 
             if (requestId === this.playbackRequestId && this.isCurrentMusic(savedMusic)) {
                 this.setCurrentMusic(musicItem);
-                void this.enrichCurrentMusic(musicItem, requestId);
+                if (!musicItem.artwork) {
+                    void this.enrichCurrentMusic(musicItem, requestId);
+                }
             }
 
             try {
@@ -271,6 +276,7 @@ class TrackPlayer {
         options: IPlayOptions = { restartOnSameMedia: true },
     ): Promise<void> {
         if (this.playQueue.isEmpty) return;
+        this.playRequested = true;
 
         const queue = this.playQueue.queue;
         index = ((index % queue.length) + queue.length) % queue.length;
@@ -316,7 +322,8 @@ class TrackPlayer {
 
             // 播放
             this.commitSource(result, musicItem);
-            this.audioController.play();
+            if (this.playRequested) this.audioController.play();
+            else this.audioController.pause();
 
             // 记录到最近播放（异步，不阻塞播放）
             addToRecentlyPlayed(musicItem).catch(() => {});
@@ -430,10 +437,12 @@ class TrackPlayer {
     }
 
     pause(): void {
+        this.playRequested = false;
         this.audioController.pause();
     }
 
     resume(): void {
+        this.playRequested = true;
         if (!this.audioController.hasSource) {
             // 无音源（如恢复失败），尝试重新加载当前曲目
             const idx = this.playQueue.getCurrentIndex();
@@ -446,7 +455,7 @@ class TrackPlayer {
     }
 
     togglePlayPause(): void {
-        if (this.audioController.playerState === PlayerState.Playing) {
+        if (this.playRequested || this.audioController.playerState === PlayerState.Playing) {
             this.pause();
         } else {
             this.resume();
@@ -520,13 +529,14 @@ class TrackPlayer {
 
             // 解析期间旧源可能继续播放，用户也可能 seek/pause；提交时读取最新意图。
             const currentTime = store.get(progressAtom).currentTime;
-            const wasPlaying = this.audioController.playerState === PlayerState.Playing;
+            const shouldPlay = this.playRequested;
             sourceReplaced = true;
             this.commitSource(result, musicItem);
             this.audioController.seekTo(currentTime);
-            if (wasPlaying) {
+            if (shouldPlay) {
                 this.audioController.play();
             } else {
+                this.audioController.pause();
                 store.set(playerStateAtom, PlayerState.Paused);
             }
             if (!result.sourceInfo.isLocal) {
@@ -541,6 +551,7 @@ class TrackPlayer {
             if (sourceReplaced) {
                 // 原音源已卸载时不能宣称回滚后仍在播放。
                 this.audioController.reset();
+                this.pause();
                 store.set(sourceInfoAtom, null);
                 store.set(playerStateAtom, PlayerState.Paused);
             } else {
@@ -709,6 +720,7 @@ class TrackPlayer {
         const behavior = appConfig.getConfigByKey('playMusic.playError') ?? 'skip';
 
         if (
+            this.playRequested &&
             behavior === 'skip' &&
             this.playQueue.queue.length > 1 &&
             this.consecutiveErrors < this.MAX_CONSECUTIVE_ERRORS
@@ -716,6 +728,7 @@ class TrackPlayer {
             // 主路径：跳到下一首
             await delay(500);
             if (
+                this.playRequested &&
                 requestId === this.playbackRequestId &&
                 musicItem &&
                 this.isCurrentMusic(musicItem)
@@ -727,12 +740,12 @@ class TrackPlayer {
             }
         } else if (this.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
             // 安全兜底：连续多次失败，停止播放避免无限循环
-            this.audioController.pause();
+            this.pause();
             store.set(playerStateAtom, PlayerState.Paused);
             this.consecutiveErrors = 0;
         } else {
             // 单曲队列 / 非 skip 配置，暂停
-            this.audioController.pause();
+            this.pause();
             store.set(playerStateAtom, PlayerState.Paused);
         }
     }
@@ -742,6 +755,7 @@ class TrackPlayer {
      * 同时作为流截断无法续播时的安全归宿，保证播放始终向前推进。
      */
     private async advanceAfterCompletion(): Promise<void> {
+        if (!this.playRequested) return;
         this.truncationRetries = 0;
         this.resetProgress();
         const repeatMode = store.get(repeatModeAtom);
@@ -762,7 +776,7 @@ class TrackPlayer {
      */
     private async resumeFromTruncation(seekTime: number): Promise<void> {
         const target = this.playQueue.getCurrentMusic();
-        if (!target) return;
+        if (!target || !this.playRequested) return;
 
         const requestId = ++this.playbackRequestId;
         store.set(playerStateAtom, PlayerState.Buffering);
@@ -777,7 +791,8 @@ class TrackPlayer {
 
             this.commitSource(result, musicItem);
             this.audioController.seekTo(seekTime);
-            this.audioController.play();
+            if (this.playRequested) this.audioController.play();
+            else this.audioController.pause();
         } catch (e) {
             if (requestId !== this.playbackRequestId) return;
             await this.handlePlayError(target, e);
@@ -831,6 +846,7 @@ class TrackPlayer {
 
     /** 清空播放状态（空队列等场景） */
     private clearPlayback(): void {
+        this.playRequested = false;
         ++this.playbackRequestId;
         this.audioController.reset();
         this.lyricManager.reset();

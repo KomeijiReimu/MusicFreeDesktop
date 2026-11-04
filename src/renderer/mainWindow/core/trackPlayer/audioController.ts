@@ -68,7 +68,7 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
     }
 
     get hasSource(): boolean {
-        return !!this.audio.src && this.audio.src !== location.href;
+        return !!this.audio.src && this.audio.src !== location.href && !this.audio.error;
     }
 
     constructor() {
@@ -186,8 +186,12 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
 
     pause(): void {
         this._playRequested = false;
-        if (this.hasSource) {
-            this.audio.pause();
+        this.audio.pause();
+        // 无 src 的 fetch 等待期也必须结束 UI 的 Buffering；原生 pause 可能不会触发。
+        if (this._playerState === PlayerState.Paused) {
+            this.emit('stateChange', PlayerState.Paused);
+        } else {
+            this.setPlayerState(PlayerState.Paused);
         }
     }
 
@@ -263,7 +267,8 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
         };
 
         this.audio.onerror = (event) => {
-            if (!this.hasSource || !this.audio.error) return;
+            // hasSource 会排除失效源，此处检查原始 src 才能继续传播真实媒体错误。
+            if (!this.audio.src || this.audio.src === location.href || !this.audio.error) return;
             this._playRequested = false;
             this.setPlayerState(PlayerState.Paused);
             this.emit('error', ErrorReason.EmptyResource, event);

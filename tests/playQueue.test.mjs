@@ -88,7 +88,10 @@ function harness(random = () => 0) {
             },
             playQueueBridge: bridge,
         },
-        '@common/delay': async () => {},
+        '@common/delay': async () => {
+            env.delayStarted?.resolve();
+            return env.delayPromise;
+        },
         '@common/throttle': (callback) => callback,
         '@infra/pluginManager/renderer': {
             callPluginMethod: async () => {
@@ -201,6 +204,7 @@ function harness(random = () => 0) {
             pause() {
                 this.pauses++;
                 this.playerState = env.constants.PlayerState.Paused;
+                this.emit('stateChange', this.playerState);
             },
             prepareTrack() {
                 this.hasSource = false;
@@ -225,6 +229,7 @@ function harness(random = () => 0) {
         env.audio = audio;
         player.playQueue = env.queue;
         player.audioController = audio;
+        player.playRequested = true;
         player.lyricManager = { fetchLyric() {}, reset() {} };
         if (!resolveSources) {
             player.resolveSource = async () => ({
@@ -728,4 +733,169 @@ test('Quality: failed online resolution rolls back; selecting the current tier c
     assert.equal(await switching, false);
     assert.equal(audio.sources.length, 0);
     assert.equal(env.syncKV.get('player.currentQuality'), 'standard');
+});
+
+test('Intent: pause survives late initial/continuation sources; explicit resume can play them', async () => {
+    for (const continuation of [false, true]) {
+        const env = harness();
+        env.queue.setQueue([a, b], { playIndex: 0 });
+        const { player, audio } = env.player();
+        player.bindAudioEvents();
+        if (!continuation) audio.hasSource = false;
+        const started = deferred();
+        const pending = deferred();
+        player.resolveSource = () => {
+            started.resolve();
+            return pending.promise;
+        };
+        const loading = continuation ? player.resumeFromTruncation(23) : player.playIndex(0);
+        await started.promise;
+        player.pause();
+        assert.equal(env.store.get(env.atoms.playerStateAtom), env.constants.PlayerState.Paused);
+        pending.resolve({
+            source: { url: 'mock:late', quality: 'standard' },
+            sourceInfo: { isLocal: false },
+        });
+        await loading;
+        assert.equal(audio.sources.length, 1);
+        assert.equal(audio.plays, 0);
+        assert.equal(env.store.get(env.atoms.playerStateAtom), env.constants.PlayerState.Paused);
+        if (continuation) assert.deepEqual(audio.seeks, [23]);
+        await player.advanceAfterCompletion();
+        assert.equal(env.queue.getCurrentMusic().id, 'a');
+        player.resume();
+        assert.equal(audio.plays, 1);
+        assert.equal(audio.sources.length, 1);
+    }
+});
+
+test('Intent: pause cancels delayed error skip; a new explicit next still plays', async () => {
+    const env = harness();
+    env.queue.setQueue([a, b], { playIndex: 0 });
+    const { player, audio } = env.player();
+    player.bindAudioEvents();
+    env.delayStarted = deferred();
+    const delay = deferred();
+    env.delayPromise = delay.promise;
+    const handling = player.handlePlayError(a);
+    await env.delayStarted.promise;
+    player.pause();
+    delay.resolve();
+    await handling;
+    assert.equal(env.queue.getCurrentMusic().id, 'a');
+    assert.equal(audio.plays, 0);
+    assert.equal(audio.sources.length, 0);
+    assert.equal(env.store.get(env.atoms.playerStateAtom), env.constants.PlayerState.Paused);
+    await player.skipToNext();
+    assert.equal(env.queue.getCurrentMusic().id, 'b');
+    assert.equal(audio.plays, 1);
+});
+
+test('AudioController: source-less pause notifies immediately; native errors make the source unusable', async () => {
+    const fetching = deferred();
+    const attached = deferred();
+    const audios = [];
+    class AudioMock {
+        constructor() {
+            audios.push(this);
+            this._src = '';
+            this.paused = true;
+            this.error = null;
+            this.plays = 0;
+        }
+        get src() {
+            return this._src;
+        }
+        set src(value) {
+            this._src = value;
+            if (value) attached.resolve(value);
+        }
+        removeAttribute() {
+            this._src = '';
+        }
+        load() {
+            this.error = null;
+        }
+        pause() {
+            this.paused = true;
+        } // Deliberately no native pause event.
+        play() {
+            this.plays++;
+            this.paused = false;
+            return Promise.resolve();
+        }
+    }
+    class URLMock extends URL {
+        static createObjectURL() {
+            return 'blob:mock';
+        }
+        static revokeObjectURL() {}
+    }
+    const { constants } = harness();
+    const session = { playbackState: 'none', metadata: null };
+    const source = readFileSync(
+        path.join(root, 'src/renderer/mainWindow/core/trackPlayer/audioController.ts'),
+        'utf8',
+    );
+    const { outputText } = ts.transpileModule(source, {
+        compilerOptions: {
+            module: ts.ModuleKind.CommonJS,
+            target: ts.ScriptTarget.ES2021,
+            esModuleInterop: true,
+        },
+    });
+    const exports = {};
+    vm.runInNewContext(outputText, {
+        exports,
+        require: (name) => {
+            if (name === 'eventemitter3') return EventEmitter;
+            if (name === 'hls.js') return class {};
+            if (name === '@common/constant') return constants;
+            if (name === '@infra/requestForwarder/renderer') return { buildProxyUrl: (url) => url };
+            throw new Error(`Unexpected audio dependency: ${name}`);
+        },
+        Audio: AudioMock,
+        URL: URLMock,
+        AbortController,
+        HTMLMediaElement: { HAVE_METADATA: 1 },
+        MediaMetadata: class {
+            constructor(data) {
+                Object.assign(this, data);
+            }
+        },
+        navigator: { mediaSession: session },
+        location: { href: 'app://player' },
+        fetch: () => fetching.promise,
+    });
+    const controller = exports.createAudioController();
+    const audio = audios[0];
+    const states = [],
+        errors = [];
+    controller.on('stateChange', (state) => states.push(state));
+    controller.on('error', (...args) => errors.push(args));
+    controller.updateMetadata(a);
+    controller.setTrackSource(
+        { url: 'https://example.test/audio', headers: { 'X-Test': 'mock' } },
+        a,
+    );
+    controller.play();
+    assert.equal(controller.hasSource, false);
+    controller.pause();
+    controller.pause();
+    assert.deepEqual(states, [constants.PlayerState.Paused, constants.PlayerState.Paused]);
+    assert.equal(session.playbackState, 'paused');
+    fetching.resolve({ ok: true, blob: async () => ({}) });
+    await attached.promise;
+    audio.oncanplay();
+    assert.equal(audio.plays, 0);
+    assert.equal(controller.hasSource, true);
+    audio.error = { code: 3, message: 'Controlled decoding error' };
+    audio.onerror({ type: 'error' });
+    assert.equal(errors.length, 1);
+    assert.equal(controller.hasSource, false);
+    assert.equal(session.metadata.title, a.title);
+    controller.play();
+    assert.equal(audio.plays, 0);
+    controller.setTrackSource({ url: 'https://example.test/retry' }, a);
+    assert.equal(controller.hasSource, true);
 });
