@@ -184,7 +184,6 @@ class TrackPlayer {
                 // 恢复失败不阻塞启动
             }
         }
-
         // 5. 绑定事件
         this.bindAudioEvents();
         this.bindAppSyncCommands();
@@ -253,7 +252,11 @@ class TrackPlayer {
         const targetSlim = queue[index];
 
         // 相同歌曲处理
-        if (this.playQueue.getCurrentIndex() === index && this.isCurrentMusic(targetSlim)) {
+        if (
+            this.playQueue.getCurrentIndex() === index &&
+            this.isCurrentMusic(targetSlim) &&
+            this.audioController.hasSource
+        ) {
             if (options.restartOnSameMedia) this.audioController.seekTo(0);
             this.audioController.play();
             return;
@@ -262,9 +265,9 @@ class TrackPlayer {
         // 切歌
         this.playQueue.setCurrentIndex(index);
         this.setCurrentMusic(targetSlim);
+        this.audioController.prepareTrack();
 
         store.set(playerStateAtom, PlayerState.Buffering);
-        this.audioController.prepareTrack(targetSlim);
         this.resetProgress();
 
         try {
@@ -272,6 +275,8 @@ class TrackPlayer {
             const fullItem = await musicSheet.getRawMusicItem(targetSlim.platform, targetSlim.id);
             const musicItem: IMusic.IMusicItem = fullItem ?? (targetSlim as IMusic.IMusicItem);
 
+            if (!this.isCurrentMusic(targetSlim)) return;
+            this.setCurrentMusic(musicItem, false);
             // 获取音源：优先使用已下载的本地文件
             const quality = store.get(qualityAtom);
             const result = await this.resolveSource(musicItem, quality);
@@ -311,6 +316,7 @@ class TrackPlayer {
                 .catch(() => {});
         } catch (e) {
             this.audioController.reset();
+            if (!this.isCurrentMusic(targetSlim)) return;
             await this.handlePlayError(targetSlim, e);
         }
     }

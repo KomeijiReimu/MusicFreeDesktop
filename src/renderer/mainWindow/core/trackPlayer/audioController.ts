@@ -7,7 +7,6 @@
  */
 import EventEmitter from 'eventemitter3';
 import Hls from 'hls.js';
-import type { IMusicItemSlim } from '@appTypes/infra/musicSheet';
 import { PlayerState, ErrorReason } from '@common/constant';
 import requestForwarder from '@infra/requestForwarder/renderer';
 
@@ -32,8 +31,8 @@ export interface IAudioControllerEvents {
 
 /** 音频控制器接口 — 所有实现必须遵守 */
 export interface IAudioController extends EventEmitter<IAudioControllerEvents> {
-    /** 预准备（设置 MediaSession metadata，清空旧音源） */
-    prepareTrack(musicItem: IMusicItemSlim): void;
+    /** 预准备：清空旧音源，不改动元数据 */
+    prepareTrack(): void;
     /** 更新系统媒体元数据，不中断播放 */
     updateMetadata(musicItem: IMusic.IMusicItem | null): void;
     /** 设置音源并可选自动播放 */
@@ -58,8 +57,11 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
     private audio: HTMLAudioElement;
     private hls: Hls | null = null;
     private _playerState: PlayerState = PlayerState.None;
-    private _sourceId = 0; // fetch 竞态守卫
+    private _sourceId = 0; // 音源版本：释放后旧异步结果不可再生效
     private _currentBlobUrl: string | null = null; // 追踪 blob URL 防止内存泄漏
+    private _sourceAbortController: AbortController | null = null;
+    private _playRequested = false;
+    private _pendingSeek: number | null = null;
 
     get playerState(): PlayerState {
         return this._playerState;
@@ -88,19 +90,13 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
             : null;
     }
 
-    prepareTrack(musicItem: IMusicItemSlim): void {
-        this.updateMetadata(musicItem);
-        this.setPlayerState(PlayerState.None);
-        this.audio.src = '';
-        this.audio.removeAttribute('src');
-        navigator.mediaSession.playbackState = 'none';
+    prepareTrack(): void {
+        this.releaseSource();
     }
 
     setTrackSource(source: IPlugin.IMediaSourceResult, _musicItem: IMusic.IMusicItem): void {
-        this.destroyHls();
-        this.revokeBlobUrl();
-        this.setPlayerState(PlayerState.None);
-        const sourceId = ++this._sourceId;
+        this.releaseSource();
+        const sourceId = this._sourceId;
 
         // 从 URL 的 userinfo 部分提取 Basic Auth（如 http://user:pass@host/...）
         const { cleanUrl: url, authHeader } = this.extractBasicAuth(source.url!);
@@ -138,8 +134,12 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
                 return;
             }
             // 代理不可用，降级到 fetch
-            fetch(url, { method: 'GET', headers })
-                .then((res) => res.blob())
+            this._sourceAbortController = new AbortController();
+            fetch(url, { method: 'GET', headers, signal: this._sourceAbortController.signal })
+                .then((res) => {
+                    if (!res.ok) throw new Error(`Media request failed: HTTP ${res.status}`);
+                    return res.blob();
+                })
                 .then((blob) => {
                     // 竞态守卫：fetch 期间可能已切歌
                     if (this._sourceId !== sourceId) return;
@@ -148,7 +148,12 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
                 })
                 .catch((err) => {
                     if (this._sourceId !== sourceId) return;
+                    this._playRequested = false;
+                    this.setPlayerState(PlayerState.Paused);
                     this.emit('error', ErrorReason.EmptyResource, err);
+                })
+                .finally(() => {
+                    if (this._sourceId === sourceId) this._sourceAbortController = null;
                 });
             return;
         }
@@ -157,21 +162,41 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
     }
 
     play(): void {
+        this._playRequested = true;
         if (this.hasSource) {
-            this.audio.play().catch(() => {});
+            const sourceId = this._sourceId;
+            this.audio.play().catch((err) => {
+                // pause/load 会取消尚未完成的 play；只报告当前音源的实际失败。
+                if (
+                    this._sourceId !== sourceId ||
+                    err.name === 'AbortError' ||
+                    this.audio.error // 媒体错误由 onerror 统一报告，避免重复跳歌。
+                ) {
+                    return;
+                }
+                this._playRequested = false;
+                this.setPlayerState(PlayerState.Paused);
+                this.emit('error', ErrorReason.EmptyResource, err);
+            });
         }
     }
 
     pause(): void {
+        this._playRequested = false;
         if (this.hasSource) {
             this.audio.pause();
         }
     }
 
     seekTo(seconds: number): void {
-        if (this.hasSource && isFinite(seconds)) {
-            this.audio.currentTime = Math.min(seconds, this.audio.duration || Infinity);
+        if (!isFinite(seconds)) return;
+        const target = Math.max(0, seconds);
+        if (!this.hasSource || this.audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+            this._pendingSeek = target;
+            return;
         }
+        this._pendingSeek = null;
+        this.audio.currentTime = Math.min(target, this.audio.duration || Infinity);
     }
 
     setVolume(volume: number): void {
@@ -188,39 +213,61 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
     }
 
     reset(): void {
-        this.setPlayerState(PlayerState.None);
-        this.revokeBlobUrl();
-        this.audio.src = '';
-        this.audio.removeAttribute('src');
+        this.releaseSource();
         this.updateMetadata(null);
-        navigator.mediaSession.playbackState = 'none';
     }
 
     destroy(): void {
-        this.destroyHls();
         this.reset();
         this.removeAllListeners();
     }
 
     // ─── Private Methods ───
 
+    /** 切歌、换源和清空共用同一释放路径，先使旧异步结果失效。 */
+    private releaseSource(): void {
+        ++this._sourceId;
+        this._sourceAbortController?.abort();
+        this._sourceAbortController = null;
+        this._playRequested = false;
+        this._pendingSeek = null;
+        this.destroyHls();
+        this.audio.pause();
+        this.audio.removeAttribute('src');
+        this.audio.load();
+        this.revokeBlobUrl();
+        this.setPlayerState(PlayerState.None);
+    }
+
     private bindEvents(): void {
+        this.audio.onloadedmetadata = () => {
+            if (this._pendingSeek !== null) this.seekTo(this._pendingSeek);
+        };
+
+        this.audio.oncanplay = () => {
+            // fetch/HLS 的音源异步挂载，保留之前的播放请求；恢复状态不自动播放。
+            if (this._playRequested && this.audio.paused) this.play();
+        };
+
         this.audio.onplaying = () => {
+            if (!this.hasSource || this.audio.paused) return;
             this.setPlayerState(PlayerState.Playing);
-            navigator.mediaSession.playbackState = 'playing';
         };
 
         this.audio.onpause = () => {
+            if (!this.hasSource || !this.audio.paused) return;
             this.setPlayerState(PlayerState.Paused);
-            navigator.mediaSession.playbackState = 'paused';
         };
 
         this.audio.onerror = (event) => {
+            if (!this.hasSource || !this.audio.error) return;
+            this._playRequested = false;
             this.setPlayerState(PlayerState.Paused);
             this.emit('error', ErrorReason.EmptyResource, event);
         };
 
         this.audio.ontimeupdate = () => {
+            if (!this.hasSource) return;
             this.emit('timeUpdate', {
                 currentTime: this.audio.currentTime,
                 duration: this.audio.duration,
@@ -228,6 +275,8 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
         };
 
         this.audio.onended = () => {
+            if (!this.hasSource) return;
+            this._playRequested = false;
             this.setPlayerState(PlayerState.Paused);
             this.emit('ended', {
                 currentTime: this.audio.currentTime,
@@ -245,6 +294,12 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
     }
 
     private setPlayerState(state: PlayerState): void {
+        navigator.mediaSession.playbackState =
+            state === PlayerState.Playing
+                ? 'playing'
+                : state === PlayerState.Paused
+                  ? 'paused'
+                  : 'none';
         if (this._playerState !== state) {
             this._playerState = state;
             this.emit('stateChange', state);
@@ -254,12 +309,14 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
     // ─── HLS ───
 
     private initHls(): void {
-        this.destroyHls();
+        const sourceId = this._sourceId;
         this.hls = new Hls();
         this.hls.attachMedia(this.audio);
 
         this.hls.on(Hls.Events.ERROR, (_event: any, data: any) => {
-            if (data.fatal) {
+            if (data.fatal && this._sourceId === sourceId) {
+                this._playRequested = false;
+                this.setPlayerState(PlayerState.Paused);
                 this.emit('error', ErrorReason.EmptyResource, data);
             }
         });
