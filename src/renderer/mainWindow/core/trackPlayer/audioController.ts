@@ -92,10 +92,13 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
 
     prepareTrack(): void {
         this.releaseSource();
+        this.setPlayerState(PlayerState.None);
     }
 
     setTrackSource(source: IPlugin.IMediaSourceResult, _musicItem: IMusic.IMusicItem): void {
         this.releaseSource();
+        // 换源仍需让下一次 playing 发出状态变化，但不要用清理状态覆盖上层的 Buffering。
+        this.setPlayerState(PlayerState.None, false);
         const sourceId = this._sourceId;
 
         // 从 URL 的 userinfo 部分提取 Basic Auth（如 http://user:pass@host/...）
@@ -214,6 +217,7 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
 
     reset(): void {
         this.releaseSource();
+        this.setPlayerState(PlayerState.None);
         this.updateMetadata(null);
     }
 
@@ -236,7 +240,6 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
         this.audio.removeAttribute('src');
         this.audio.load();
         this.revokeBlobUrl();
-        this.setPlayerState(PlayerState.None);
     }
 
     private bindEvents(): void {
@@ -293,7 +296,7 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
         };
     }
 
-    private setPlayerState(state: PlayerState): void {
+    private setPlayerState(state: PlayerState, notify = true): void {
         navigator.mediaSession.playbackState =
             state === PlayerState.Playing
                 ? 'playing'
@@ -302,7 +305,7 @@ class WebAudioController extends EventEmitter<IAudioControllerEvents> implements
                   : 'none';
         if (this._playerState !== state) {
             this._playerState = state;
-            this.emit('stateChange', state);
+            if (notify) this.emit('stateChange', state);
         }
     }
 
