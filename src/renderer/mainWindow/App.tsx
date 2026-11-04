@@ -14,6 +14,8 @@
 //   PlayerBar 从 sidebar 右侧开始，不覆盖 sidebar
 
 import { Outlet } from 'react-router';
+import { useEffect } from 'react';
+import { setupLocalMusicDrop } from './core/localMusicDrop';
 import Sidebar from './components/layout/Sidebar';
 import TopBar from './components/layout/TopBar';
 import PlayerBar from './components/layout/PlayerBar';
@@ -30,6 +32,8 @@ import './components/business/contextMenus';
 import './App.scss';
 
 export default function App() {
+    useEffect(() => setupLocalMusicDrop(), []);
+
     return (
         <div className="l-app-shell">
             <Sidebar />
