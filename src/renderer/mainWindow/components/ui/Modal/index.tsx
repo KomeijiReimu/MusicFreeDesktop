@@ -1,4 +1,12 @@
-import { type ReactNode, type MouseEvent, useEffect, useCallback, useId, useRef } from 'react';
+import {
+    type ReactNode,
+    type MouseEvent,
+    type DragEventHandler,
+    useEffect,
+    useCallback,
+    useId,
+    useRef,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -37,6 +45,10 @@ export interface ModalProps {
     manageFocus?: boolean;
     /** 打开弹窗前的操作元素；菜单项卸载后仍可返回菜单的来源。 */
     returnFocusTo?: HTMLElement | null;
+    /** 局部拖放由弹窗接管，避免落入全局导入处理。 */
+    onDragOverCapture?: DragEventHandler<HTMLDivElement>;
+    onDragLeaveCapture?: DragEventHandler<HTMLDivElement>;
+    onDropCapture?: DragEventHandler<HTMLDivElement>;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -81,6 +93,9 @@ export default function Modal({
     footer,
     manageFocus = false,
     returnFocusTo,
+    onDragOverCapture,
+    onDragLeaveCapture,
+    onDropCapture,
 }: ModalProps) {
     const panelRef = useRef<HTMLDivElement>(null);
     const titleId = useId();
@@ -147,6 +162,9 @@ export default function Modal({
                         exit={{ opacity: 0 }}
                         transition={transition}
                         onClick={handleBackdropClick}
+                        onDragOverCapture={onDragOverCapture}
+                        onDragLeaveCapture={onDragLeaveCapture}
+                        onDropCapture={onDropCapture}
                     >
                         <motion.div
                             ref={panelRef}

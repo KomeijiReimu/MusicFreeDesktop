@@ -102,6 +102,12 @@
             border-color: var(--color-fill-brand);
         }
 
+        &.is-dragging {
+            color: var(--color-text-primary);
+            border-color: var(--color-fill-brand);
+            background-color: var(--color-fill-subtle-hover);
+        }
+
         &:focus-visible {
             outline: none;
             box-shadow:
@@ -128,5 +134,46 @@
         font-size: var(--text-caption-size);
         line-height: var(--text-caption-leading);
         color: var(--color-text-muted);
+    }
+
+    &__failures,
+    &__error {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-2);
+        min-width: 0;
+    }
+
+    &__failure-title,
+    &__error {
+        font-size: var(--text-caption-size);
+        line-height: var(--text-caption-leading);
+        color: var(--color-status-warn-text);
+    }
+
+    &__failure-list {
+        width: 100%;
+        max-height: calc(var(--space-10) * 5);
+        overflow: auto;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+    }
+
+    &__failure {
+        font-size: var(--text-caption-size);
+        line-height: var(--text-caption-leading);
+        color: var(--color-text-secondary);
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+        user-select: text;
+    }
+
+    &__status {
+        font-size: var(--text-label-size);
+        line-height: var(--text-label-leading);
+        color: var(--color-text-primary);
     }
 }
