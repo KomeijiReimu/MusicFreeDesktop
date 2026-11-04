@@ -363,18 +363,28 @@ class LocalMusicManager {
                 };
 
                 for (const folder of finalFolders) {
-                    const result = await this.enqueueScan(folder.id, folder.folderPath);
-                    totalResult.added += result.added;
-                    totalResult.updated += result.updated;
-                    totalResult.removed += result.removed;
-                    totalResult.unchanged += result.unchanged;
-                    totalResult.elapsed += result.elapsed;
-                    totalResult.failed += result.failed;
-                    totalResult.failures.push(...result.failures);
-                    this.queries.updateScanFolderLastScan.run({
-                        id: folder.id,
-                        lastScanAt: Date.now(),
-                    });
+                    try {
+                        const result = await this.enqueueScan(folder.id, folder.folderPath);
+                        totalResult.added += result.added;
+                        totalResult.updated += result.updated;
+                        totalResult.removed += result.removed;
+                        totalResult.unchanged += result.unchanged;
+                        totalResult.elapsed += result.elapsed;
+                        totalResult.failed += result.failed;
+                        totalResult.failures.push(...result.failures);
+                        if (result.failed === 0) {
+                            this.queries.updateScanFolderLastScan.run({
+                                id: folder.id,
+                                lastScanAt: Date.now(),
+                            });
+                        }
+                    } catch (error) {
+                        totalResult.failed++;
+                        totalResult.failures.push({
+                            filePath: folder.folderPath,
+                            reason: error instanceof Error ? error.message : String(error),
+                        });
+                    }
                 }
 
                 this.broadcastLibraryChanged();

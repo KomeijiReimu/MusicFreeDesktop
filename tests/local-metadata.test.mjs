@@ -83,7 +83,7 @@ test('真实标签写入使已有解析缓存失效', async () => {
     assert.equal(afterWrite.title, 'Updated title');
 });
 
-test('详情只补齐同一文件的已知格式，不覆盖扫描得到的时长', async () => {
+async function loadLocalMusicManager(overrides = {}) {
     // 隔离 Electron/数据库入口，执行实际主进程 IPC handler，不启动应用。
     const require = createRequire(import.meta.url);
     const ts = require('typescript');
@@ -99,29 +99,25 @@ test('详情只补齐同一文件的已知格式，不覆盖扫描得到的时�
         },
     }).outputText;
     const handlers = new Map();
-    const meta = {
-        fileSize: 100,
-        fileMtime: 12.5,
-        format: { duration: undefined, sampleRate: 96000, lossless: false, bitrate: 0 },
-        common: {},
-        native: {},
-    };
     const dependencies = {
         electron: { ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) } },
         nanoid: {},
         '@common/constant': {},
-        '../common/constant': { IPC: { GET_METADATA: 'metadata' } },
+        '../common/constant': {
+            IPC: {
+                GET_METADATA: 'metadata',
+                SYNC_SCAN_FOLDERS: 'sync-folders',
+                LIBRARY_CHANGED: 'library-changed',
+                SCAN_PROGRESS: 'scan-progress',
+            },
+            SCAN_BATCH_SIZE: 100,
+        },
         './scanner': {},
         './metadataParser': {},
         './metadataWriter': {},
         './pathImport': {},
-        '../common/parseAudioMeta': {
-            parseAudioMeta: async (_filePath, options) => {
-                assert.equal(options.includeDetails, true);
-                assert.notEqual(options.duration, true);
-                return meta;
-            },
-        },
+        '../common/parseAudioMeta': {},
+        ...overrides,
     };
     const module = { exports: {} };
     new Function('require', 'module', 'exports', compiled)(
@@ -130,6 +126,27 @@ test('详情只补齐同一文件的已知格式，不覆盖扫描得到的时�
         module.exports,
     );
     const manager = module.exports.default;
+    manager.registerIpcHandlers();
+    return { manager, handlers };
+}
+
+test('详情只补齐同一文件的已知格式，不覆盖扫描得到的时长', async () => {
+    const meta = {
+        fileSize: 100,
+        fileMtime: 12.5,
+        format: { duration: undefined, sampleRate: 96000, lossless: false, bitrate: 0 },
+        common: {},
+        native: {},
+    };
+    const { manager, handlers } = await loadLocalMusicManager({
+        '../common/parseAudioMeta': {
+            parseAudioMeta: async (_filePath, options) => {
+                assert.equal(options.includeDetails, true);
+                assert.notEqual(options.duration, true);
+                return meta;
+            },
+        },
+    });
     let saved;
     manager.queries = {
         getFileMetadata: {
@@ -153,7 +170,6 @@ test('详情只补齐同一文件的已知格式，不覆盖扫描得到的时�
             },
         },
     };
-    manager.registerIpcHandlers();
     const getMetadata = handlers.get('metadata');
     const result = await getMetadata(null, path.join(directory, 'vbr.mp3'));
     assert.deepEqual(result.format, {
@@ -175,4 +191,90 @@ test('详情只补齐同一文件的已知格式，不覆盖扫描得到的时�
         );
         assert.equal(Object.hasOwn(saved, 'duration'), false);
     }
+});
+
+test('多目录扫描保留成功结果、失败后继续，最终只通知一次', async () => {
+    const folders = ['A', 'B', 'C'].map((id) => ({ id, folderPath: path.join(directory, id) }));
+    const discovered = [];
+    const diffed = [];
+    const written = [];
+    const lastScanned = [];
+    const broadcasts = [];
+    const { manager, handlers } = await loadLocalMusicManager({
+        './scanner': {
+            discoverAudioFiles: async (folderPath) => {
+                discovered.push(folderPath);
+                if (folderPath === folders[1].folderPath) throw new Error('EACCES: 无法读取目录');
+                return [{ filePath: path.join(folderPath, 'track.wav'), size: 100, mtime: 12 }];
+            },
+            diffWithDb: (files) => ({ added: files, changed: [], removed: [], unchanged: 0 }),
+        },
+        './metadataParser': {
+            parseFileMetadata: async (filePath, fileSize, fileMtime, scanFolderId) => ({
+                filePath,
+                fileSize,
+                fileMtime,
+                scanFolderId,
+                platform: '本地',
+                id: filePath,
+                title: 'Track',
+                artist: '',
+                album: '',
+                duration: 1,
+                artwork: null,
+                folder: path.dirname(filePath),
+                createdAt: 1,
+            }),
+        },
+    });
+    manager.db = { getDatabase: () => ({ transaction: (operation) => operation }) };
+    manager.appConfig = { getConfigByKey: () => [] };
+    manager.windowManager = { broadcast: (channel) => broadcasts.push(channel) };
+    manager.queries = {
+        getAllScanFolders: { all: () => folders },
+        getLocalMusicByScanFolder: {
+            all: (id) => {
+                diffed.push(id);
+                return [];
+            },
+        },
+        upsertLocalMusic: { run: (item) => written.push(item.scanFolderId) },
+        updateScanFolderLastScan: { run: (item) => lastScanned.push(item.id) },
+        deleteLocalMusic: { run: () => assert.fail('发现失败的目录不能删除库记录') },
+    };
+    const syncFolders = handlers.get('sync-folders');
+    const result = await syncFolders(
+        null,
+        folders.map((folder) => folder.folderPath),
+    );
+    assert.deepEqual(
+        discovered,
+        folders.map((folder) => folder.folderPath),
+    );
+    assert.deepEqual(diffed, ['A', 'C']);
+    assert.deepEqual(written, ['A', 'C']);
+    assert.deepEqual(lastScanned, ['A', 'C']);
+    assert.equal(result.added, 2);
+    assert.equal(result.failed, 1);
+    assert.deepEqual(result.failures, [
+        { filePath: folders[1].folderPath, reason: 'EACCES: 无法读取目录' },
+    ]);
+    assert.equal(broadcasts.filter((channel) => channel === 'library-changed').length, 1);
+
+    // 配置事务失败不能降级成扫描结果。
+    manager.db = {
+        getDatabase: () => ({
+            transaction: () => {
+                throw new Error('配置写入失败');
+            },
+        }),
+    };
+    await assert.rejects(
+        syncFolders(
+            null,
+            folders.map((folder) => folder.folderPath),
+        ),
+        /配置写入失败/,
+    );
+    assert.equal(broadcasts.filter((channel) => channel === 'library-changed').length, 1);
 });
