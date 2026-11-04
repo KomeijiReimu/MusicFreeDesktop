@@ -14,6 +14,8 @@ const mod = {
     getAllMusicItems: () => ipcRenderer.invoke(IPC.GET_ALL_MUSIC_ITEMS),
     getAudioInfo: (filePath: string) => ipcRenderer.invoke(IPC.GET_AUDIO_INFO, filePath),
     getMetadata: (filePath: string) => ipcRenderer.invoke(IPC.GET_METADATA, filePath),
+    importPaths: (paths: string[]) => ipcRenderer.invoke(IPC.IMPORT_PATHS, paths),
+    getDirectories: (paths: string[]) => ipcRenderer.invoke(IPC.GET_DIRECTORIES, paths),
 
     // ─── 扫描文件夹管理（异步 IPC） ───
     getScanFolders: () => ipcRenderer.invoke(IPC.GET_SCAN_FOLDERS),

@@ -34,6 +34,7 @@ import { discoverAudioFiles, diffWithDb } from './scanner';
 import { parseFileMetadata } from './metadataParser';
 import { canWriteTags, writeFileTags } from './metadataWriter';
 import { parseAudioMeta } from '../common/parseAudioMeta';
+import { getDirectories, importPaths } from './pathImport';
 
 function metadataFilePath(value: unknown): string {
     if (typeof value !== 'string' || value.includes('\0') || !path.isAbsolute(value)) {
@@ -192,6 +193,9 @@ class LocalMusicManager {
     }
 
     private registerIpcHandlers() {
+        ipcMain.handle(IPC.IMPORT_PATHS, (_evt, paths: unknown) => importPaths(paths));
+        ipcMain.handle(IPC.GET_DIRECTORIES, (_evt, paths: unknown) => getDirectories(paths));
+
         ipcMain.handle(IPC.GET_AUDIO_INFO, async (_evt, input: unknown): Promise<IAudioFormat> => {
             const filePath = metadataFilePath(input);
             const stat = await fsp.stat(filePath);

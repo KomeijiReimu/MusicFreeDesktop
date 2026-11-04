@@ -11,6 +11,8 @@ import { CONTEXT_BRIDGE_KEY } from './common/constant';
 import type {
     IAudioFormat,
     ILocalMusicMetadata,
+    ILocalMusicImportResult,
+    ILocalMusicDirectoriesResult,
     IScanFolder,
     IScanProgress,
     IScanResult,
@@ -22,6 +24,8 @@ interface IMod {
     getAllMusicItems(): Promise<IMusic.IMusicItem[]>;
     getAudioInfo(filePath: string): Promise<IAudioFormat>;
     getMetadata(filePath: string): Promise<ILocalMusicMetadata>;
+    importPaths(paths: string[]): Promise<ILocalMusicImportResult>;
+    getDirectories(paths: string[]): Promise<ILocalMusicDirectoriesResult>;
 
     getScanFolders(): Promise<IScanFolder[]>;
     syncScanFolders(folderPaths: string[]): Promise<IScanResult>;
@@ -42,6 +46,14 @@ const mod = window[CONTEXT_BRIDGE_KEY as any] as unknown as IMod;
 // ─── LocalMusicRenderer ───
 
 class LocalMusicRenderer {
+    public importPaths(paths: string[]): Promise<ILocalMusicImportResult> {
+        return mod.importPaths(paths);
+    }
+
+    public getDirectories(paths: string[]): Promise<ILocalMusicDirectoriesResult> {
+        return mod.getDirectories(paths);
+    }
+
     public getAudioInfo(filePath: string): Promise<IAudioFormat> {
         return mod.getAudioInfo(filePath);
     }

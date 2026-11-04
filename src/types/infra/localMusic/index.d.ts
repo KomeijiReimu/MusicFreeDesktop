@@ -86,6 +86,17 @@ export interface IScanFailure {
     reason: string;
 }
 
+export interface ILocalMusicImportResult {
+    /** 轻量歌曲信息；播放时再按需读取封面和歌词。 */
+    musicItems: IMusic.IMusicItem[];
+    failures: IScanFailure[];
+}
+
+export interface ILocalMusicDirectoriesResult {
+    directories: string[];
+    failures: IScanFailure[];
+}
+
 /** 扫描结果摘要 */
 export interface IScanResult {
     added: number;

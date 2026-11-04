@@ -1,34 +1,15 @@
 import { LOCAL_PLUGIN_NAME, SUPPORTED_AUDIO_EXTS } from '@common/constant';
-import { createHash } from 'crypto';
 import fsp from 'fs/promises';
 import path from 'path';
-import url from 'url';
-import i18n from '@infra/i18n/main';
 import { parseAudioMeta } from '@infra/localMusic/common/parseAudioMeta';
-
-function addFileScheme(filePath: string): string {
-    return filePath.startsWith('file:') ? filePath : url.pathToFileURL(filePath).toString();
-}
+import { addFileScheme, toLocalMusicItem } from '@infra/localMusic/main/localMusicItem';
 
 /**
  * 解析单个本地音乐文件的元数据
  */
 async function parseLocalMusicItem(filePath: string): Promise<IMusic.IMusicItem> {
-    const id = createHash('md5').update(filePath).digest('hex');
     const meta = await parseAudioMeta(filePath, { duration: true });
-
-    return {
-        id,
-        platform: LOCAL_PLUGIN_NAME,
-        title: meta.title ?? (path.parse(filePath).name || filePath),
-        artist: meta.artist ?? i18n.t('media.unknown_artist'),
-        album: meta.album ?? i18n.t('media.unknown_album'),
-        duration: meta.duration ?? null,
-        url: addFileScheme(filePath),
-        localPath: filePath,
-        artwork: meta.artwork,
-        rawLrc: meta.rawLrc,
-    };
+    return toLocalMusicItem(filePath, meta);
 }
 
 /**

@@ -14,6 +14,8 @@ export const IPC = {
     GET_ALL_MUSIC_ITEMS: '@infra/local-music/get-all-music-items',
     GET_AUDIO_INFO: '@infra/local-music/get-audio-info',
     GET_METADATA: '@infra/local-music/get-metadata',
+    IMPORT_PATHS: '@infra/local-music/import-paths',
+    GET_DIRECTORIES: '@infra/local-music/get-directories',
 
     // ─── 删除 ───
     DELETE_ITEMS: '@infra/local-music/delete-items',

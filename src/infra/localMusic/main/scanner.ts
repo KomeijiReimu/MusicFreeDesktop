@@ -8,7 +8,7 @@
 
 import fsp from 'fs/promises';
 import path from 'path';
-import type { IFileInfo, IDiffResult } from '@appTypes/infra/localMusic';
+import type { IFileInfo, IDiffResult, IScanFailure } from '@appTypes/infra/localMusic';
 import { SUPPORTED_AUDIO_EXTS } from '@common/constant';
 
 /**
@@ -36,27 +36,59 @@ export async function discoverAudioFiles(
     return discoverRecursive(dir, normalizedExcluded);
 }
 
-async function discoverRecursive(dir: string, normalizedExcluded: string[]): Promise<IFileInfo[]> {
+/** 导入保留可访问的文件，同时报告失败目录；库扫描仍沿用 fail-fast 语义。 */
+export async function discoverAudioFilesForImport(
+    dir: string,
+): Promise<{ files: IFileInfo[]; failures: IScanFailure[] }> {
+    const failures: IScanFailure[] = [];
+    const files = await discoverRecursive(dir, [], failures);
+    return { files, failures };
+}
+
+async function discoverRecursive(
+    dir: string,
+    normalizedExcluded: string[],
+    failures?: IScanFailure[],
+): Promise<IFileInfo[]> {
     const results: IFileInfo[] = [];
 
     // 发现阶段失败须中止 diff，不能把不可访问的目录误认为空目录并删除库记录。
-    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    let entries;
+    try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch (error) {
+        if (!failures) throw error;
+        failures.push({
+            filePath: dir,
+            reason: error instanceof Error ? error.message : String(error),
+        });
+        return results;
+    }
 
     for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
             if (isExcluded(fullPath, normalizedExcluded)) continue;
-            const sub = await discoverRecursive(fullPath, normalizedExcluded);
+            const sub = await discoverRecursive(fullPath, normalizedExcluded, failures);
             for (const item of sub) {
                 results.push(item);
             }
         } else if (SUPPORTED_AUDIO_EXTS.has(path.extname(entry.name).toLowerCase())) {
-            const stat = await fsp.stat(fullPath);
-            results.push({
-                filePath: fullPath,
-                size: stat.size,
-                mtime: stat.mtimeMs,
-            });
+            try {
+                const stat = await fsp.stat(fullPath);
+                if (!stat.isFile()) continue;
+                results.push({
+                    filePath: fullPath,
+                    size: stat.size,
+                    mtime: stat.mtimeMs,
+                });
+            } catch (error) {
+                if (!failures) throw error;
+                failures.push({
+                    filePath: fullPath,
+                    reason: error instanceof Error ? error.message : String(error),
+                });
+            }
         }
     }
     return results;
