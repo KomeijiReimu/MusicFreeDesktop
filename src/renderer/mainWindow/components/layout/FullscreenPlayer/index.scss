@@ -3,6 +3,20 @@
 // ============================================================================
 
 .l-fullscreen-player {
+    --fullscreen-header-padding: var(--space-6);
+    --fullscreen-bottom-padding: var(--space-10);
+    --fullscreen-controls-margin: var(--space-12);
+    --fullscreen-controls-gap: var(--space-6);
+    --fullscreen-play-button-size: calc(var(--size-control-lg) + var(--space-4));
+    --fullscreen-header-height: calc(var(--size-control-lg) + 2 * var(--fullscreen-header-padding));
+    --fullscreen-controls-height: calc(
+        var(--fullscreen-play-button-size) + var(--fullscreen-controls-gap) +
+            var(--volume-control-size)
+    );
+    --volume-control-size: var(--size-control-sm);
+    --volume-panel-bg: var(--color-bg-placeholder);
+    --volume-focus-bg: var(--color-bg-fullscreen);
+
     // 全局语义颜色覆盖，确保全屏播放器在任何主题下都使用深色调
     --color-bg-fullscreen: rgb(9, 9, 11);
     --color-bg-overlay: rgba(0, 0, 0, 0.6);
@@ -66,8 +80,15 @@
         flex-shrink: 0;
         display: flex;
         align-items: center;
-        padding: var(--space-6) var(--space-10);
+        padding: var(--fullscreen-header-padding) var(--space-10);
         -webkit-app-region: drag;
+    }
+
+    &__window-controls {
+        position: absolute;
+        top: 0;
+        right: 0;
+        -webkit-app-region: no-drag;
     }
 
     &__close-btn {
@@ -111,7 +132,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 0 10% var(--space-10);
+        padding: 0 10% var(--fullscreen-bottom-padding);
         gap: 8%;
     }
 
@@ -126,7 +147,20 @@
 
     &__artwork {
         position: relative;
-        width: 100%;
+        // 先为标题栏、底部留白和两行控件留足高度，宽矮窗口只缩封面。
+        width: min(
+            100%,
+            max(
+                0px,
+                calc(
+                    100vh - var(--fullscreen-header-height) - var(
+                            --fullscreen-bottom-padding
+                        ) - var(--fullscreen-controls-margin) - var(--fullscreen-controls-height)
+                )
+            )
+        );
+        align-self: center;
+        flex-shrink: 0;
         aspect-ratio: 1 / 1;
         border-radius: var(--radius-artwork);
         overflow: hidden;
@@ -162,7 +196,7 @@
         flex-direction: column;
         align-self: stretch;
         justify-content: center;
-        padding: var(--space-6) 0;
+        padding: var(--fullscreen-header-padding) 0;
     }
 
     // ── 歌曲信息 ──
@@ -322,8 +356,8 @@
         flex-shrink: 0;
         display: flex;
         flex-direction: column;
-        gap: var(--space-6);
-        margin-top: var(--space-12);
+        gap: var(--fullscreen-controls-gap);
+        margin-top: var(--fullscreen-controls-margin);
     }
 
     // ── 播控行 ──
@@ -366,8 +400,8 @@
 
         &--play {
             // 全屏播放按钮，比 --size-control-lg(40px) 更大以突出主操作
-            width: 56px;
-            height: 56px;
+            width: var(--fullscreen-play-button-size);
+            height: var(--fullscreen-play-button-size);
             background-color: var(--color-fill-neutral);
 
             &:hover {
@@ -395,13 +429,10 @@
         color: var(--color-text-muted);
         font-variant-numeric: tabular-nums;
         min-width: 3.5em;
+        text-align: left;
 
         &:first-child {
             text-align: right;
-        }
-
-        &:last-child {
-            text-align: left;
         }
     }
 
@@ -580,5 +611,28 @@
         font-size: var(--text-caption-size);
         line-height: var(--text-caption-leading);
         color: var(--color-text-secondary);
+    }
+}
+
+// 宽矮窗口减少纵向留白，给三行歌词工具和歌曲信息保留空间。
+@media (max-height: 640px) {
+    .l-fullscreen-player {
+        --fullscreen-header-padding: var(--space-3);
+        --fullscreen-bottom-padding: var(--space-6);
+        --fullscreen-controls-margin: var(--space-6);
+        --fullscreen-controls-gap: var(--space-4);
+
+        &__song-info {
+            margin-bottom: var(--space-4);
+        }
+
+        &__song-title {
+            font-size: var(--text-display-size);
+            -webkit-line-clamp: 2;
+        }
+
+        &__song-artist {
+            -webkit-line-clamp: 1;
+        }
     }
 }

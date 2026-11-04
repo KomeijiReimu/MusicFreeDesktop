@@ -1,0 +1,140 @@
+// 与原底栏音量控件保持相同尺寸；独立 Block 供播放详情复用。
+.volume-popover {
+    position: relative;
+    flex-shrink: 0;
+    margin-left: var(--space-1);
+    -webkit-app-region: no-drag;
+
+    &__trigger {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        // 原底栏按钮为 30px，详情页通过变量使用标准小控件尺寸。
+        width: var(--volume-control-size, 30px);
+        height: var(--volume-control-size, 30px);
+        border: none;
+        padding: 0;
+        border-radius: var(--radius-full);
+        background: transparent;
+        color: var(--color-text-secondary);
+        cursor: pointer;
+        transition: color var(--duration-fast) var(--ease-standard);
+
+        &:hover {
+            color: var(--color-text-primary);
+        }
+    }
+
+    &__trigger:focus-visible,
+    &__track:focus-visible {
+        outline: none;
+        box-shadow:
+            0 0 0 var(--focus-ring-offset) var(--volume-focus-bg, var(--color-bg-base)),
+            var(--focus-ring);
+    }
+
+    &__panel {
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%) scale(0.9);
+        transform-origin: bottom center;
+        margin-bottom: var(--space-3);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: var(--space-2);
+        width: var(--size-control-md);
+        padding: var(--space-3) 0;
+        background-color: var(--volume-panel-bg, var(--color-bg-modal));
+        border: 1px solid var(--color-border-subtle);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-md);
+        z-index: var(--z-popover);
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition:
+            opacity var(--duration-normal) var(--ease-standard),
+            transform var(--duration-normal) var(--ease-standard);
+
+        &.is-visible {
+            opacity: 1;
+            visibility: visible;
+            transform: translateX(-50%) scale(1);
+            pointer-events: auto;
+        }
+
+        // 桥接按钮与面板间隙，保持悬停。
+        &::before {
+            content: '';
+            position: absolute;
+            bottom: calc(-1 * var(--space-3));
+            left: 0;
+            right: 0;
+            height: var(--space-3);
+        }
+
+        &::after {
+            content: '';
+            position: absolute;
+            // 沿用原气泡的 10px 箭头，向下露出一半。
+            bottom: -5px;
+            left: 50%;
+            transform: translateX(-50%) rotate(45deg);
+            width: 10px;
+            height: 10px;
+            background-color: var(--volume-panel-bg, var(--color-bg-modal));
+            border-right: 1px solid var(--color-border-subtle);
+            border-bottom: 1px solid var(--color-border-subtle);
+            border-radius: 1px;
+        }
+    }
+
+    &__value {
+        font-size: var(--text-caption-size);
+        font-weight: var(--font-weight-medium);
+        color: var(--color-text-secondary);
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        white-space: nowrap;
+    }
+
+    &__track {
+        width: var(--space-1);
+        // 沿用原垂直滑条的 100px 行程。
+        height: 100px;
+        position: relative;
+        border-radius: var(--radius-pill);
+        background-color: var(--color-fill-neutral);
+        cursor: pointer;
+        touch-action: none;
+
+        &:active .volume-popover__fill,
+        &:active .volume-popover__thumb {
+            transition: none;
+        }
+    }
+
+    &__fill {
+        position: absolute;
+        bottom: 0;
+        width: 100%;
+        border-radius: var(--radius-pill);
+        background-color: var(--color-fill-brand-hover);
+        transition: height 0.05s linear;
+    }
+
+    &__thumb {
+        position: absolute;
+        left: 50%;
+        transform: translate(-50%, 50%);
+        // 保留原滑块的 10px 白色圆点，与主题背景区分。
+        width: 10px;
+        height: 10px;
+        border-radius: var(--radius-full);
+        background-color: #fff;
+        box-shadow: var(--shadow-md);
+        transition: bottom 0.05s linear;
+    }
+}

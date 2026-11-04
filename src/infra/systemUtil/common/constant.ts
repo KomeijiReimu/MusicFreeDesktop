@@ -10,6 +10,8 @@ export const IPC = {
     MINIMIZE_WINDOW: '@infra/system-util/minimize-window',
     SHOW_MAIN_WINDOW: '@infra/system-util/show-main-window',
     TOGGLE_MAXIMIZE: '@infra/system-util/toggle-maximize',
+    IS_MAXIMIZED: '@infra/system-util/is-maximized',
+    MAXIMIZED_CHANGE: '@infra/system-util/maximized-change',
     TOGGLE_VISIBLE: '@infra/system-util/toggle-visible',
     IGNORE_MOUSE_EVENT: '@infra/system-util/ignore-mouse-event',
     ENTER_MINIMODE: '@infra/system-util/enter-minimode',

@@ -4,7 +4,7 @@
 //
 // 封面下方的播放控制区域，从上到下两行：
 //   1. 播控行：❤️ (左) / 上一首·播放暂停·下一首 (中) / 播放模式 (右)
-//   2. 进度行：当前时间 / 进度条(slim) / 总时长
+//   2. 进度行：当前时间 / 进度条(slim) / 总时长 / 音量
 //
 // FullscreenProgressBar 独立 memo 子组件，隔离 useProgress 高频更新。
 
@@ -24,6 +24,7 @@ import {
 import { REPEAT_MODE_MAP } from '@renderer/common/repeatModeMap';
 import { ProgressBar } from '../../ui/ProgressBar';
 import { useProgressDrag } from '@renderer/mainWindow/hooks/useProgressDrag';
+import VolumePopover from '../PlayerBar/VolumePopover';
 
 // ─── FullscreenProgressBar — 隔离高频 progressAtom 更新 ───
 
@@ -44,6 +45,7 @@ const FullscreenProgressBar = memo(function FullscreenProgressBar() {
                 onDragEnd={handleDragEnd}
             />
             <span className="l-fullscreen-player__time">{formatDuration(progress.duration)}</span>
+            <VolumePopover />
         </div>
     );
 });

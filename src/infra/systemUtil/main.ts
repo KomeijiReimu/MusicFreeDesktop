@@ -83,6 +83,14 @@ class SystemUtil {
             }
         });
 
+        ipcMain.handle(IPC.IS_MAXIMIZED, (evt): boolean => {
+            const win = BrowserWindow.fromWebContents(evt.sender);
+            if (!win) {
+                throw new Error('No window available');
+            }
+            return win.isMaximized();
+        });
+
         ipcMain.on(IPC.TOGGLE_VISIBLE, (evt) => {
             const windowType = this.windowManager.getWindowType(evt.sender.id);
             if (!windowType) return;

@@ -20,6 +20,7 @@ import path from 'path';
 import appConfig from '@infra/appConfig/main';
 import i18n from '@infra/i18n/main';
 import windowDrag from '@infra/windowDrag/main';
+import { IPC as SYSTEM_UTIL_IPC } from '@infra/systemUtil/common/constant';
 import debounce from '@common/debounce';
 import throttle from '@common/throttle';
 import type { IWindowManager, IWindowEvents, WindowType } from '@appTypes/main/windowManager';
@@ -408,6 +409,14 @@ class WindowManager implements IWindowManager {
 
         // 系统触发的恢复也应重新显示任务栏入口。
         mainWindow.on('restore', () => mainWindow.setSkipTaskbar(false));
+
+        // 监听随 BrowserWindow 生命周期释放，仅通知对应的主窗口页面。
+        mainWindow.on('maximize', () => {
+            mainWindow.webContents.send(SYSTEM_UTIL_IPC.MAXIMIZED_CHANGE, true);
+        });
+        mainWindow.on('unmaximize', () => {
+            mainWindow.webContents.send(SYSTEM_UTIL_IPC.MAXIMIZED_CHANGE, false);
+        });
 
         // 加载主界面（首屏路由由 renderer 侧 React Router index route 处理）
         mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);

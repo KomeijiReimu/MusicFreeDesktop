@@ -1,0 +1,38 @@
+.l-window-controls {
+    display: flex;
+    -webkit-app-region: no-drag;
+
+    &__button {
+        // 延续现有桌面标题栏 46px 按钮宽度。
+        width: 46px;
+        height: var(--size-control-sm);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        background: transparent;
+        color: var(--color-text-secondary);
+        cursor: pointer;
+        -webkit-app-region: no-drag;
+        transition:
+            background-color var(--duration-fast) var(--ease-standard),
+            color var(--duration-fast) var(--ease-standard);
+
+        &:hover {
+            background-color: var(--color-fill-subtle-hover);
+            color: var(--color-text-primary);
+        }
+
+        &:focus-visible {
+            // 内缩避免顶部及右侧窗口边缘裁掉焦点轮廓。
+            outline: 2px solid var(--color-fill-brand);
+            outline-offset: -2px;
+        }
+
+        &--close:hover {
+            // 保留现有关闭按钮的桌面系统红色与白色图标。
+            background-color: #e81123;
+            color: #fff;
+        }
+    }
+}

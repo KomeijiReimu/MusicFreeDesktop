@@ -2,14 +2,16 @@
 // VolumePopover — 音量垂直气泡面板
 // ============================================================================
 //
-// hover 音量按钮时弹出垂直滑条，支持拖拽、点击定位和鼠标滚轮调节。
+// 悬停或键盘聚焦时弹出垂直滑条，支持拖拽、滚轮和方向键调节。
 // 背景纯色 (--color-bg-modal)，不使用 backdrop-filter。
 
-import { useCallback, useRef, useEffect, memo } from 'react';
+import { useCallback, useRef, useEffect, useId, useState, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Volume2, Volume1, VolumeX } from 'lucide-react';
 import trackPlayer from '@renderer/mainWindow/core/trackPlayer';
 import { useVolume } from '@renderer/mainWindow/core/trackPlayer/hooks';
+import { volumeMemory } from './volumeMemory';
+import './VolumePopover.scss';
 
 /** 根据音量值选择图标 */
 function getVolumeIcon(volume: number) {
@@ -18,8 +20,8 @@ function getVolumeIcon(volume: number) {
     return Volume2;
 }
 
-/** 每次滚轮步进 */
-const WHEEL_STEP = 0.02;
+/** 滚轮和方向键每次调节 2%。 */
+const VOLUME_STEP = 0.02;
 
 /**
  * VolumePopover
@@ -33,46 +35,67 @@ const VolumePopover = memo(function VolumePopover() {
     const { t } = useTranslation();
     const volume = useVolume();
     const VolumeIcon = getVolumeIcon(volume);
+    const [open, setOpen] = useState(false);
+    const popoverId = useId();
 
     const anchorRef = useRef<HTMLDivElement>(null);
-    const popoverRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const trackRef = useRef<HTMLDivElement>(null);
     const isDraggingRef = useRef(false);
-    const prevVolumeRef = useRef(1);
     /** 供原生 wheel listener 读取最新值，避免闭包过时 */
     const volumeRef = useRef(volume);
     volumeRef.current = volume;
+
+    const changeVolume = useCallback((nextVolume: number) => {
+        if (volumeRef.current > 0) volumeMemory.lastNonZero = volumeRef.current;
+        if (nextVolume > 0) volumeMemory.lastNonZero = nextVolume;
+        volumeRef.current = nextVolume;
+        trackPlayer.setVolume(nextVolume);
+    }, []);
 
     // ── 显示/隐藏逻辑 ──
 
     const show = useCallback(() => {
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
-            popoverRef.current?.classList.add('is-visible');
+            setOpen(true);
         }, 120);
     }, []);
 
     const hide = useCallback(() => {
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
-            popoverRef.current?.classList.remove('is-visible');
+            if (!anchorRef.current?.contains(document.activeElement) && !isDraggingRef.current) {
+                setOpen(false);
+            }
         }, 200);
+    }, []);
+
+    useEffect(() => {
+        return () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+        };
     }, []);
 
     // ── 垂直滑条拖拽 ──
 
-    const setVolumeFromPointer = useCallback((clientY: number) => {
-        const track = trackRef.current;
-        if (!track) return;
-        const rect = track.getBoundingClientRect();
-        // 底部 = 0，顶部 = 1
-        const pct = Math.max(0, Math.min(1, (rect.bottom - clientY) / rect.height));
-        trackPlayer.setVolume(pct);
-    }, []);
+    const setVolumeFromPointer = useCallback(
+        (clientY: number) => {
+            const track = trackRef.current;
+            if (!track) return;
+            const rect = track.getBoundingClientRect();
+            // 底部 = 0，顶部 = 1
+            const pct = Math.max(0, Math.min(1, (rect.bottom - clientY) / rect.height));
+            changeVolume(pct);
+        },
+        [changeVolume],
+    );
 
     const handlePointerDown = useCallback(
-        (e: React.PointerEvent) => {
+        (e: React.PointerEvent<HTMLDivElement>) => {
+            e.preventDefault();
+            e.currentTarget.focus();
             e.currentTarget.setPointerCapture(e.pointerId);
             isDraggingRef.current = true;
             setVolumeFromPointer(e.clientY);
@@ -100,34 +123,82 @@ const VolumePopover = memo(function VolumePopover() {
 
         const onWheel = (e: WheelEvent) => {
             e.preventDefault();
-            const delta = e.deltaY < 0 ? WHEEL_STEP : -WHEEL_STEP;
-            trackPlayer.setVolume(Math.max(0, Math.min(1, volumeRef.current + delta)));
+            const delta = e.deltaY < 0 ? VOLUME_STEP : -VOLUME_STEP;
+            changeVolume(Math.max(0, Math.min(1, volumeRef.current + delta)));
         };
 
         el.addEventListener('wheel', onWheel, { passive: false });
         return () => el.removeEventListener('wheel', onWheel);
-    }, []);
+    }, [changeVolume]);
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (e.key === 'Escape' && open) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (timerRef.current) clearTimeout(timerRef.current);
+            setOpen(false);
+            triggerRef.current?.focus();
+            return;
+        }
+
+        let nextVolume: number;
+        switch (e.key) {
+            case 'ArrowUp':
+            case 'ArrowRight':
+                nextVolume = Math.min(1, volumeRef.current + VOLUME_STEP);
+                break;
+            case 'ArrowDown':
+            case 'ArrowLeft':
+                nextVolume = Math.max(0, volumeRef.current - VOLUME_STEP);
+                break;
+            case 'Home':
+                nextVolume = 0;
+                break;
+            case 'End':
+                nextVolume = 1;
+                break;
+            default:
+                return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(true);
+        changeVolume(nextVolume);
+    };
 
     const volumePct = Math.round(volume * 100);
 
     return (
         <div
             ref={anchorRef}
-            className="l-player-bar__popover-anchor"
+            className="volume-popover"
             onMouseEnter={show}
             onMouseLeave={hide}
+            onFocus={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget)) {
+                    if (timerRef.current) clearTimeout(timerRef.current);
+                    setOpen(true);
+                }
+            }}
+            onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget)) hide();
+            }}
+            onKeyDown={handleKeyDown}
         >
             {/* 触发按钮 */}
             <button
-                className="l-player-bar__ctrl-btn"
+                ref={triggerRef}
+                className="volume-popover__trigger"
                 type="button"
                 title={t('playback.volume_percent', { volume: volumePct })}
+                aria-label={`${t(volume === 0 ? 'playback.unmute' : 'playback.mute')}, ${t('playback.volume_percent', { volume: volumePct })}`}
+                aria-expanded={open}
+                aria-controls={popoverId}
                 onClick={() => {
                     if (volume === 0) {
-                        trackPlayer.setVolume(prevVolumeRef.current || 1);
+                        changeVolume(volumeMemory.lastNonZero);
                     } else {
-                        prevVolumeRef.current = volume;
-                        trackPlayer.setVolume(0);
+                        changeVolume(0);
                     }
                 }}
             >
@@ -135,30 +206,33 @@ const VolumePopover = memo(function VolumePopover() {
             </button>
 
             {/* 气泡面板 */}
-            <div ref={popoverRef} className="l-player-bar__popover">
-                <span className="l-player-bar__popover-value">{volumePct}</span>
+            <div
+                id={popoverId}
+                className={`volume-popover__panel${open ? ' is-visible' : ''}`}
+                aria-hidden={!open}
+            >
+                <span className="volume-popover__value" aria-hidden="true">
+                    {volumePct}
+                </span>
                 <div
                     ref={trackRef}
-                    className="l-player-bar__popover-track"
+                    className="volume-popover__track"
                     role="slider"
                     aria-label={t('playback.volume')}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={volumePct}
-                    tabIndex={0}
+                    aria-valuetext={t('playback.volume_percent', { volume: volumePct })}
+                    aria-orientation="vertical"
+                    tabIndex={open ? 0 : -1}
                     onPointerDown={handlePointerDown}
                     onPointerMove={handlePointerMove}
                     onPointerUp={handlePointerUp}
+                    onPointerCancel={handlePointerUp}
                     onLostPointerCapture={handlePointerUp}
                 >
-                    <div
-                        className="l-player-bar__popover-fill"
-                        style={{ height: `${volumePct}%` }}
-                    />
-                    <div
-                        className="l-player-bar__popover-thumb"
-                        style={{ bottom: `${volumePct}%` }}
-                    />
+                    <div className="volume-popover__fill" style={{ height: `${volumePct}%` }} />
+                    <div className="volume-popover__thumb" style={{ bottom: `${volumePct}%` }} />
                 </div>
             </div>
         </div>

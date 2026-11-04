@@ -23,6 +23,8 @@ interface IMod {
         minimizeWindow(skipTaskBar?: boolean): void;
         showMainWindow(): void;
         toggleMaximize(): void;
+        isMaximized(): Promise<boolean>;
+        onMaximizedChange(callback: (maximized: boolean) => void): () => void;
         toggleVisible(): void;
         ignoreMouseEvent(ignore: boolean): void;
         enterMinimode(): void;
@@ -86,6 +88,16 @@ class SystemUtilRenderer {
     /** 切换主窗口最大化状态 */
     public toggleMaximize(): void {
         mod.window.toggleMaximize();
+    }
+
+    /** 查询当前窗口的最大化状态 */
+    public isMaximized(): Promise<boolean> {
+        return mod.window.isMaximized();
+    }
+
+    /** 订阅主窗口最大化状态变化，返回取消订阅函数 */
+    public onMaximizedChange(callback: (maximized: boolean) => void): () => void {
+        return mod.window.onMaximizedChange(callback);
     }
 
     /** 切换主窗口可见性 */

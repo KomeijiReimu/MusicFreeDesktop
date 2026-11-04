@@ -192,7 +192,7 @@
         }
     }
 
-    // ── 垂直气泡面板（音量 / 倍速共用） ──
+    // ── 气泡面板（倍速 / 音质共用；音量样式见 VolumePopover.scss） ──
 
     &__popover-anchor {
         position: relative;
@@ -319,6 +319,8 @@
     &__quality-option-check {
         flex-shrink: 0;
     }
+
+    // ── 倍速数值与垂直滑条 ──
 
     &__popover-value {
         font-size: var(--text-caption-size);

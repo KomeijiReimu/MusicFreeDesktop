@@ -19,6 +19,17 @@ const mod = {
             ipcRenderer.send(IPC.MINIMIZE_WINDOW, { skipTaskBar }),
         showMainWindow: () => ipcRenderer.send(IPC.SHOW_MAIN_WINDOW),
         toggleMaximize: () => ipcRenderer.send(IPC.TOGGLE_MAXIMIZE),
+        isMaximized: (): Promise<boolean> => ipcRenderer.invoke(IPC.IS_MAXIMIZED),
+        onMaximizedChange: (callback: (maximized: boolean) => void): (() => void) => {
+            // 只传递状态，不向渲染进程暴露 Electron 事件对象。
+            const listener = (_event: Electron.IpcRendererEvent, maximized: boolean) => {
+                callback(maximized);
+            };
+            ipcRenderer.on(IPC.MAXIMIZED_CHANGE, listener);
+            return () => {
+                ipcRenderer.removeListener(IPC.MAXIMIZED_CHANGE, listener);
+            };
+        },
         toggleVisible: () => ipcRenderer.send(IPC.TOGGLE_VISIBLE),
         ignoreMouseEvent: (ignore: boolean) => ipcRenderer.send(IPC.IGNORE_MOUSE_EVENT, ignore),
         enterMinimode: () => ipcRenderer.send(IPC.ENTER_MINIMODE),
