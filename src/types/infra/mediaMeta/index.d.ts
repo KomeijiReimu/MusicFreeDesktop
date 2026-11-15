@@ -1,3 +1,6 @@
+/** 本地歌词来源；auto 沿用默认获取顺序。 */
+export type ILocalLyricSource = 'auto' | 'file' | 'embedded';
+
 /** per-item 附加元数据 */
 export interface IMediaMeta {
     /** 下载信息（downloadManager 写入） */
@@ -18,6 +21,8 @@ export interface IMediaMeta {
     };
     /** 用户设置的歌词时间偏移（秒），正值歌词提前，负值延后 */
     lyricOffset?: number;
+    /** 本地歌词来源偏好；自动模式不存储此字段。 */
+    localLyricSource?: Exclude<ILocalLyricSource, 'auto'>;
 }
 
 /** setMeta patch 类型：null 表示删除该字段（RFC 7396） */

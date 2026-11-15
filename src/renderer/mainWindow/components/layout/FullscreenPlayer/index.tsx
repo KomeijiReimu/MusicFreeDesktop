@@ -273,11 +273,18 @@ const FullscreenPlayer = memo(function FullscreenPlayer() {
                                         onClick={() => setSettingsOpen((prev) => !prev)}
                                         title={t('lyric.settings')}
                                         aria-label={t('lyric.settings')}
+                                        aria-expanded={settingsOpen}
+                                        aria-controls="fullscreen-lyric-settings"
+                                        aria-haspopup="dialog"
                                     >
                                         <MoreHorizontal size={16} />
                                     </button>
 
                                     <LyricSettingsPopover
+                                        key={JSON.stringify([
+                                            currentMusic?.platform,
+                                            currentMusic?.id,
+                                        ])}
                                         open={settingsOpen}
                                         onClose={handleSettingsClose}
                                         triggerRef={settingsTriggerRef}

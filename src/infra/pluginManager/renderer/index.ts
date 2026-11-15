@@ -16,6 +16,7 @@ import type {
     IPluginMetaAll,
 } from '@appTypes/infra/pluginManager';
 import { CONTEXT_BRIDGE_KEY } from '../common/constant';
+import type { ILocalLyricSource } from '@appTypes/infra/mediaMeta';
 import { sortByPluginOrder } from '../common/sortByOrder';
 import { store, pluginsAtom, pluginMetaAtom } from './store';
 
@@ -34,7 +35,10 @@ interface IMod {
     ): Promise<void>;
     getAllPluginMeta(): Promise<IPluginMetaAll>;
     getCachedPlugins(): IPlugin.IPluginDelegate[] | null;
-    getLyric(musicItem: IMusic.IMusicItem): Promise<ILyric.ILyricSource | null>;
+    getLyric(
+        musicItem: IMusic.IMusicItem,
+        source?: ILocalLyricSource,
+    ): Promise<ILyric.ILyricSource | null>;
     getMediaSource(
         params: IGetMediaSourceParams & { hash: string },
     ): Promise<IGetMediaSourceResult | null>;
@@ -307,8 +311,11 @@ const adapters = {
      * const lyric = await pluginManager.adapters.getLyric(musicItem);
      * ```
      */
-    async getLyric(musicItem: IMusic.IMusicItem): Promise<ILyric.ILyricSource | null> {
-        return mod.getLyric(musicItem);
+    async getLyric(
+        musicItem: IMusic.IMusicItem,
+        source?: ILocalLyricSource,
+    ): Promise<ILyric.ILyricSource | null> {
+        return mod.getLyric(musicItem, source);
     },
 };
 

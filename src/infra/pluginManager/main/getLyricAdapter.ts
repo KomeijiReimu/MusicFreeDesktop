@@ -15,12 +15,14 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { isSameMedia } from '@common/mediaKey';
-import type { IMediaMetaProvider } from '@appTypes/infra/mediaMeta';
+import type { ILocalLyricSource, IMediaMetaProvider } from '@appTypes/infra/mediaMeta';
 import type { IMusicItemProvider } from '@appTypes/infra/musicSheet';
+import { parseAudioMeta } from '@infra/localMusic/common/parseAudioMeta';
 
 /** getLyric 适配器所需的参数 */
 export interface IGetLyricParams {
     musicItem: IMusic.IMusicItem;
+    source?: ILocalLyricSource;
 }
 
 /** 调用插件方法的函数类型 */
@@ -34,10 +36,12 @@ type CallPluginMethodFn = (params: {
 /**
  * 安全地检查路径是否存在且是文件。
  */
-function isFile(filePath: string): boolean {
+function isFile(filePath: string, strict: boolean): boolean {
     try {
         return fs.statSync(filePath).isFile();
-    } catch {
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (strict && code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
         return false;
     }
 }
@@ -69,6 +73,27 @@ function getLocalPath(
     return null;
 }
 
+/** 显式来源与自动模式共用同名文件及翻译的扩展名顺序。 */
+function readSiblingLyric(localPath: string, lrcUrl?: string, strict = false): ILyric.ILyricSource {
+    const fileName = path.parse(localPath).name;
+    const lrcPathWithoutExt = path.resolve(localPath, `../${fileName}`);
+    const lrcTranslationPathWithoutExt = path.resolve(localPath, `../${fileName}-tr`);
+    let translation: string | undefined;
+
+    for (const ext of ['.lrc', '.LRC', '.txt']) {
+        const lrcFilePath = lrcPathWithoutExt + ext;
+        if (isFile(lrcFilePath, strict)) {
+            const rawLrc = fs.readFileSync(lrcFilePath, 'utf-8');
+            const trFilePath = lrcTranslationPathWithoutExt + ext;
+            if (isFile(trFilePath, strict)) {
+                translation = fs.readFileSync(trFilePath, 'utf-8');
+            }
+            if (rawLrc) return { rawLrc, translation, lrc: lrcUrl };
+        }
+    }
+    return { translation };
+}
+
 /**
  * getLyric 适配器。
  * 按旧版 plugin-methods.ts 的 getLyric 逻辑，依次尝试多种获取方式。
@@ -85,7 +110,24 @@ export async function getLyricAdapter(
     mediaMeta: IMediaMetaProvider,
     musicItemProvider: IMusicItemProvider,
 ): Promise<ILyric.ILyricSource | null> {
-    const { musicItem } = params;
+    const { musicItem, source = 'auto' } = params;
+
+    // 显式来源只读取实际本地文件，不使用关联、rawLrc、插件或远程歌词兜底。
+    if (source !== 'auto') {
+        const localPath = getLocalPath(musicItem, mediaMeta, musicItemProvider);
+        if (!localPath) return null;
+        try {
+            if (source === 'file') {
+                const fileSource = readSiblingLyric(localPath, undefined, true);
+                return fileSource.rawLrc ? fileSource : null;
+            }
+            const meta = await parseAudioMeta(localPath);
+            return meta.rawLrc ? { rawLrc: meta.rawLrc } : null;
+        } catch (error) {
+            console.error('[PluginManager] Failed to read local lyrics:', source, localPath, error);
+            throw error;
+        }
+    }
 
     let rawLrc = musicItem.rawLrc;
     let lrcUrl = musicItem.lrc;
@@ -149,30 +191,9 @@ export async function getLyricAdapter(
     // ─── Step 2: 读取本地同名 .lrc 文件 ───
     const localPath = getLocalPath(musicItem, mediaMeta, musicItemProvider);
     if (localPath) {
-        const fileName = path.parse(localPath).name;
-        const lrcPathWithoutExt = path.resolve(localPath, `../${fileName}`);
-        const lrcTranslationPathWithoutExt = path.resolve(localPath, `../${fileName}-tr`);
-        const exts = ['.lrc', '.LRC', '.txt'];
-
-        for (const ext of exts) {
-            const lrcFilePath = lrcPathWithoutExt + ext;
-            if (isFile(lrcFilePath)) {
-                rawLrc = fs.readFileSync(lrcFilePath, 'utf-8');
-
-                const trFilePath = lrcTranslationPathWithoutExt + ext;
-                if (isFile(trFilePath)) {
-                    translation = fs.readFileSync(trFilePath, 'utf-8');
-                }
-
-                if (rawLrc) {
-                    return {
-                        rawLrc,
-                        translation,
-                        lrc: lrcUrl,
-                    };
-                }
-            }
-        }
+        const fileSource = readSiblingLyric(localPath, lrcUrl);
+        if (fileSource.rawLrc) return fileSource;
+        translation = fileSource.translation;
     }
 
     // ─── Step 3: 调用插件 getLyric ───

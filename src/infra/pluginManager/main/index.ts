@@ -260,6 +260,14 @@ class PluginManager {
 
         // getLyric 适配器（主进程处理，含本地 .lrc 文件读取）
         ipcMain.handle(IPC_GET_LYRIC, async (_evt, params: IGetLyricParams) => {
+            if (
+                params.source !== undefined &&
+                params.source !== 'auto' &&
+                params.source !== 'file' &&
+                params.source !== 'embedded'
+            ) {
+                throw new TypeError('Invalid local lyric source');
+            }
             await this.pluginsReadyPromise;
             return getLyricAdapter(
                 params,

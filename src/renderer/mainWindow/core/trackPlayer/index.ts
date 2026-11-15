@@ -840,7 +840,9 @@ class TrackPlayer {
         this.audioController.updateMetadata(musicItem);
         syncKV.set('player.currentMusic', musicItem);
         if (fetchLyric) {
-            this.lyricManager.fetchLyric(musicItem);
+            void this.lyricManager.fetchLyric(musicItem).catch((error) => {
+                console.error('[TrackPlayer] Failed to fetch lyrics:', error);
+            });
         }
     }
 

@@ -7,6 +7,8 @@
 import { useCallback, useRef, useEffect, useState, memo, type RefObject } from 'react';
 import { Download, Search, Unlink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { getDefaultStore, useAtomValue } from 'jotai';
+import type { ILocalLyricSource } from '@appTypes/infra/mediaMeta';
 import { Button } from '../../ui/Button';
 import {
     useLyric,
@@ -14,11 +16,18 @@ import {
     useCurrentMusic,
 } from '@renderer/mainWindow/core/trackPlayer/hooks';
 import trackPlayer from '@renderer/mainWindow/core/trackPlayer';
+import { currentMusicAtom, sourceInfoAtom } from '@renderer/mainWindow/core/trackPlayer/store';
 import { showModal } from '../../ui/Modal/modalManager';
 import { showToast } from '../../ui/Toast';
 import systemUtil from '@infra/systemUtil/renderer';
 import fsUtil from '@infra/fsUtil/renderer';
 import mediaMeta from '@infra/mediaMeta/renderer';
+
+const LYRIC_SOURCES: Array<{ value: ILocalLyricSource; label: string }> = [
+    { value: 'auto', label: 'lyric.source_auto' },
+    { value: 'file', label: 'lyric.source_file' },
+    { value: 'embedded', label: 'lyric.source_embedded' },
+];
 
 interface LyricSettingsPopoverProps {
     /** 是否打开 */
@@ -44,7 +53,49 @@ export default memo(function LyricSettingsPopover({
     const lyricState = useLyric();
     const associatedLyric = useAssociatedLyric();
     const currentMusic = useCurrentMusic();
+    const sourceInfo = useAtomValue(sourceInfoAtom);
     const panelRef = useRef<HTMLDivElement>(null);
+    const mountedRef = useRef(false);
+    const savingSourceRef = useRef(false);
+    const [lyricSource, setLyricSource] = useState<ILocalLyricSource | null>(null);
+    const [downloadPath, setDownloadPath] = useState<string>();
+    const [sourceBusy, setSourceBusy] = useState(false);
+    const [sourceChecked, setSourceChecked] = useState(false);
+    const [sourceError, setSourceError] = useState<'settings' | 'save' | 'read' | null>(null);
+    const [sourceReload, setSourceReload] = useState(0);
+    const platform = currentMusic?.platform;
+    const musicId = currentMusic == null ? undefined : String(currentMusic.id);
+    const localPath = (currentMusic as IMusic.IMusicItem | null)?.localPath;
+    const hasLocalFile = !!(localPath || sourceInfo?.isLocal || downloadPath);
+    const hasLyrics = !!lyricState?.parser?.getLyricItems().length;
+    const usesAssociatedLyric = !hasLocalFile || lyricSource === 'auto';
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (platform == null || musicId == null) return;
+        let cancelled = false;
+        setSourceError(null);
+        setLyricSource(null);
+        mediaMeta.getMeta(platform, musicId).then(
+            (meta) => {
+                if (cancelled) return;
+                setLyricSource(meta?.localLyricSource ?? 'auto');
+                setDownloadPath(meta?.downloadData?.path);
+            },
+            () => {
+                if (!cancelled) setSourceError('settings');
+            },
+        );
+        return () => {
+            cancelled = true;
+        };
+    }, [platform, musicId, sourceReload]);
 
     // 歌词偏移状态
     const [lyricOffset, setLyricOffset] = useState(() => trackPlayer.getLyricOffset());
@@ -54,7 +105,7 @@ export default memo(function LyricSettingsPopover({
         if (open) {
             setLyricOffset(trackPlayer.getLyricOffset());
         }
-    }, [open]);
+    }, [open, currentMusic]);
 
     // 点击外部关闭
     useEffect(() => {
@@ -81,6 +132,47 @@ export default memo(function LyricSettingsPopover({
             document.removeEventListener('mousedown', handler);
         };
     }, [open, onClose, triggerRef]);
+
+    const isCurrentMusic = () => {
+        const playing = getDefaultStore().get(currentMusicAtom);
+        return (
+            mountedRef.current && playing?.platform === platform && String(playing?.id) === musicId
+        );
+    };
+
+    const handleSourceChange = async (selected: ILocalLyricSource) => {
+        if (
+            platform == null ||
+            musicId == null ||
+            !hasLocalFile ||
+            lyricSource == null ||
+            savingSourceRef.current ||
+            !isCurrentMusic()
+        )
+            return;
+        savingSourceRef.current = true;
+        setSourceBusy(true);
+        setSourceChecked(false);
+        setSourceError(null);
+        let saved = selected === lyricSource;
+        try {
+            if (!saved) {
+                await mediaMeta.setMeta(platform, musicId, {
+                    localLyricSource: selected === 'auto' ? null : selected,
+                });
+                saved = true;
+            }
+            if (!isCurrentMusic()) return;
+            setLyricSource(selected);
+            await trackPlayer.refreshLyric();
+            if (isCurrentMusic()) setSourceChecked(true);
+        } catch {
+            if (isCurrentMusic()) setSourceError(saved ? 'read' : 'save');
+        } finally {
+            savingSourceRef.current = false;
+            if (isCurrentMusic()) setSourceBusy(false);
+        }
+    };
 
     /** 歌词偏移变化 */
     const handleLyricOffsetChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -135,7 +227,7 @@ export default memo(function LyricSettingsPopover({
                 showToast(t('lyric.save_failed'), { type: 'warn' });
             }
         },
-        [lyricState],
+        [lyricState, t],
     );
 
     /** 搜索歌词 */
@@ -145,20 +237,103 @@ export default memo(function LyricSettingsPopover({
     }, [onClose]);
 
     /** 取消关联歌词 */
-    const handleUnlinkLyric = useCallback(async () => {
-        if (!currentMusic) return;
-        await mediaMeta.setMeta(currentMusic.platform, String(currentMusic.id), {
-            associatedLyric: null,
-        });
-        await trackPlayer.refreshLyric();
-        showToast(t('lyric.unlinked'));
-    }, [currentMusic]);
+    const handleUnlinkLyric = async () => {
+        if (!currentMusic || savingSourceRef.current || !isCurrentMusic()) return;
+        savingSourceRef.current = true;
+        setSourceBusy(true);
+        try {
+            await mediaMeta.setMeta(currentMusic.platform, String(currentMusic.id), {
+                associatedLyric: null,
+            });
+            if (!isCurrentMusic()) return;
+            await trackPlayer.refreshLyric();
+            if (isCurrentMusic()) showToast(t('lyric.unlinked'));
+        } catch (error) {
+            console.error('[LyricSettingsPopover] Failed to unlink lyrics:', error);
+            if (isCurrentMusic()) showToast(t('lyric.unlink_failed'), { type: 'warn' });
+        } finally {
+            savingSourceRef.current = false;
+            if (isCurrentMusic()) setSourceBusy(false);
+        }
+    };
 
     if (!open) return null;
 
     return (
-        <div ref={panelRef} className="l-fullscreen-player__settings">
+        <div
+            ref={panelRef}
+            id="fullscreen-lyric-settings"
+            role="dialog"
+            aria-label={t('lyric.settings')}
+            className="l-fullscreen-player__settings"
+            onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onClose();
+                    triggerRef.current?.focus();
+                }
+            }}
+        >
             <div className="l-fullscreen-player__settings-title">{t('lyric.settings')}</div>
+
+            {hasLocalFile && (
+                <div className="l-fullscreen-player__settings-section">
+                    <fieldset
+                        className="l-fullscreen-player__source"
+                        disabled={lyricSource == null || sourceBusy}
+                        aria-busy={sourceBusy || (lyricSource == null && !sourceError)}
+                        aria-describedby="fullscreen-lyric-source-status"
+                    >
+                        <legend className="l-fullscreen-player__settings-label">
+                            {t('lyric.source_label')}
+                        </legend>
+                        <div className="l-fullscreen-player__source-options">
+                            {LYRIC_SOURCES.map(({ value, label }) => (
+                                <label key={value} className="l-fullscreen-player__source-option">
+                                    <input
+                                        type="radio"
+                                        name="local-lyric-source"
+                                        value={value}
+                                        checked={lyricSource === value}
+                                        onChange={() => handleSourceChange(value)}
+                                    />
+                                    <span>{t(label)}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </fieldset>
+                    <div
+                        id="fullscreen-lyric-source-status"
+                        className="l-fullscreen-player__source-status"
+                        role="status"
+                    >
+                        {sourceError
+                            ? t(`lyric.source_${sourceError}_failed`)
+                            : sourceBusy
+                              ? t('lyric.source_changing')
+                              : lyricSource == null
+                                ? t('common.loading')
+                                : sourceChecked && !hasLyrics && lyricSource !== 'auto'
+                                  ? t(`lyric.source_${lyricSource}_missing`)
+                                  : null}
+                    </div>
+                    {(sourceError === 'settings' || sourceError === 'read') && (
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            className="l-fullscreen-player__settings-action"
+                            onClick={() => {
+                                if (sourceError === 'settings')
+                                    setSourceReload((value) => value + 1);
+                                else if (lyricSource) void handleSourceChange(lyricSource);
+                            }}
+                        >
+                            {t('common.retry')}
+                        </Button>
+                    )}
+                </div>
+            )}
 
             {/* 字号调节 */}
             <div className="l-fullscreen-player__settings-section">
@@ -225,6 +400,7 @@ export default memo(function LyricSettingsPopover({
                         size="sm"
                         icon={<Download size={14} />}
                         className="l-fullscreen-player__settings-btn"
+                        disabled={!hasLyrics || sourceBusy}
                         onClick={() => handleDownload('lrc')}
                     >
                         LRC
@@ -234,6 +410,7 @@ export default memo(function LyricSettingsPopover({
                         size="sm"
                         icon={<Download size={14} />}
                         className="l-fullscreen-player__settings-btn"
+                        disabled={!hasLyrics || sourceBusy}
                         onClick={() => handleDownload('txt')}
                     >
                         TXT
@@ -242,21 +419,26 @@ export default memo(function LyricSettingsPopover({
             </div>
 
             {/* 更多操作 */}
-            <div className="l-fullscreen-player__settings-section">
-                <div className="l-fullscreen-player__settings-label">{t('lyric.more_actions')}</div>
-                <Button
-                    variant="secondary"
-                    size="sm"
-                    icon={<Search size={14} />}
-                    className="l-fullscreen-player__settings-action"
-                    onClick={handleSearchLyric}
-                >
-                    {t('lyric.search_and_replace')}
-                </Button>
-            </div>
+            {usesAssociatedLyric && (
+                <div className="l-fullscreen-player__settings-section">
+                    <div className="l-fullscreen-player__settings-label">
+                        {t('lyric.more_actions')}
+                    </div>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<Search size={14} />}
+                        className="l-fullscreen-player__settings-action"
+                        disabled={sourceBusy}
+                        onClick={handleSearchLyric}
+                    >
+                        {t('lyric.search_and_replace')}
+                    </Button>
+                </div>
+            )}
 
             {/* 关联歌词来源 */}
-            {associatedLyric && (
+            {associatedLyric && usesAssociatedLyric && (
                 <div className="l-fullscreen-player__settings-section l-fullscreen-player__settings-section--bordered">
                     <div className="l-fullscreen-player__settings-associated-info">
                         {t('lyric.source_info', {
@@ -270,6 +452,7 @@ export default memo(function LyricSettingsPopover({
                         size="sm"
                         icon={<Unlink size={14} />}
                         className="l-fullscreen-player__settings-action"
+                        disabled={sourceBusy}
                         onClick={handleUnlinkLyric}
                     >
                         {t('lyric.unlink')}

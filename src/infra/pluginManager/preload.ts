@@ -9,6 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ILocalLyricSource } from '@appTypes/infra/mediaMeta';
 import type {
     ICallPluginMethodParams,
     IGetMediaSourceParams,
@@ -96,8 +97,11 @@ function getCachedPlugins(): IPlugin.IPluginDelegate[] | null {
     return cachedData?.plugins ?? null;
 }
 
-async function getLyric(musicItem: IMusic.IMusicItem): Promise<ILyric.ILyricSource | null> {
-    return ipcRenderer.invoke(IPC_GET_LYRIC, { musicItem });
+async function getLyric(
+    musicItem: IMusic.IMusicItem,
+    source?: ILocalLyricSource,
+): Promise<ILyric.ILyricSource | null> {
+    return ipcRenderer.invoke(IPC_GET_LYRIC, { musicItem, source });
 }
 
 async function getMediaSource(

@@ -5,7 +5,6 @@
  * 播放进度变化时更新当前歌词行并写入 jotai atom。
  */
 import LyricParser from '@common/lyricParser';
-import { compositeKey } from '@common/mediaKey';
 import pluginManager from '@infra/pluginManager/renderer';
 import mediaMeta from '@infra/mediaMeta/renderer';
 import { store, currentLyricAtom, progressAtom, associatedLyricAtom } from './store';
@@ -15,7 +14,8 @@ const OFFSET_PERSIST_DELAY = 500;
 
 class LyricManager {
     private parser: LyricParser | null = null;
-    private currentMusicKey: string | null = null;
+    /** 每次获取（含同歌切换来源）和 reset 都使旧异步链失效。 */
+    private requestId = 0;
     /** 当前歌曲的 platform + musicId，用于写入 mediaMeta */
     private currentPlatform: string | null = null;
     private currentMusicId: string | null = null;
@@ -26,21 +26,23 @@ class LyricManager {
 
     /** 获取并解析歌词 */
     async fetchLyric(musicItem: IMusic.IMusicItem): Promise<void> {
-        const key = compositeKey(musicItem.platform, musicItem.id);
-        this.currentMusicKey = key;
+        const requestId = ++this.requestId;
         this.currentPlatform = musicItem.platform;
         this.currentMusicId = String(musicItem.id);
 
-        // 从 mediaMeta 恢复该歌曲的歌词偏移和关联歌词信息
-        const meta = await mediaMeta.getMeta(musicItem.platform, String(musicItem.id));
-        this.userOffset = meta?.lyricOffset ?? 0;
-        store.set(associatedLyricAtom, meta?.associatedLyric?.musicItem ?? null);
-
         try {
-            const lyricSource = await pluginManager.adapters.getLyric(musicItem);
+            // 序号从 getMeta 之前生效，旧请求不能覆盖偏移或关联信息。
+            const meta = await mediaMeta.getMeta(musicItem.platform, String(musicItem.id));
+            if (requestId !== this.requestId) return;
+            this.userOffset = meta?.lyricOffset ?? 0;
+            store.set(associatedLyricAtom, meta?.associatedLyric?.musicItem ?? null);
 
-            // 切歌了，丢弃旧结果
-            if (this.currentMusicKey !== key) return;
+            const lyricSource = await pluginManager.adapters.getLyric(
+                musicItem,
+                meta?.localLyricSource,
+            );
+
+            if (requestId !== this.requestId) return;
 
             if (!lyricSource?.rawLrc && !lyricSource?.lrc) {
                 this.parser = null;
@@ -59,11 +61,12 @@ class LyricManager {
                 parser: this.parser,
                 currentLrc: this.parser.getPosition(currentTime + this.userOffset) ?? undefined,
             });
-        } catch {
-            if (this.currentMusicKey === key) {
-                this.parser = null;
-                store.set(currentLyricAtom, null);
-            }
+        } catch (error) {
+            console.error('[LyricManager] Failed to fetch lyrics:', error);
+            if (requestId !== this.requestId) return;
+            this.parser = null;
+            store.set(currentLyricAtom, null);
+            throw error;
         }
     }
 
@@ -84,8 +87,8 @@ class LyricManager {
 
     /** 重置 */
     reset(): void {
+        ++this.requestId;
         this.parser = null;
-        this.currentMusicKey = null;
         this.currentPlatform = null;
         this.currentMusicId = null;
         this.userOffset = 0;
@@ -126,7 +129,6 @@ class LyricManager {
     async refreshLyric(musicItem: IMusic.IMusicItem): Promise<void> {
         // 清除当前歌词状态，让 fetchLyric 重新加载
         this.parser = null;
-        this.currentMusicKey = null;
         store.set(currentLyricAtom, null);
         await this.fetchLyric(musicItem);
     }

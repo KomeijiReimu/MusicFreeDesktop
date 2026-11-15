@@ -135,7 +135,7 @@ function harness(random = () => 0) {
         '../recentlyPlayed': { addToRecentlyPlayed: async () => {} },
         './audioController': { createAudioController: () => env.audio },
         './lyricManager': class {
-            fetchLyric() {}
+            async fetchLyric() {}
             reset() {}
         },
     };
@@ -230,7 +230,7 @@ function harness(random = () => 0) {
         player.playQueue = env.queue;
         player.audioController = audio;
         player.playRequested = true;
-        player.lyricManager = { fetchLyric() {}, reset() {} };
+        player.lyricManager = { async fetchLyric() {}, reset() {} };
         if (!resolveSources) {
             player.resolveSource = async () => ({
                 source: { url: 'mock:audio', quality: 'standard' },
