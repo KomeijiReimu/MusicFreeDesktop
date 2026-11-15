@@ -638,9 +638,8 @@
     },
     "quality": {
         "no_source": "No quality information available",
-        "local_fixed": "Local files have fixed audio quality",
         "lossless": "Lossless",
-        "read_failed": "Read failed",
+        "read_failed": "Couldn't read audio information",
         "switch": "Change Quality",
         "unavailable": "This quality is not available",
         "low": "Low",

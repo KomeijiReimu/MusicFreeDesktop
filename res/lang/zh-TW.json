@@ -638,9 +638,8 @@
     },
     "quality": {
         "no_source": "暫無音質資訊",
-        "local_fixed": "本地檔案音質固定",
         "lossless": "無損",
-        "read_failed": "讀取失敗",
+        "read_failed": "無法讀取音訊資訊",
         "switch": "選擇音樂音質",
         "unavailable": "暫無此音質歌曲",
         "low": "低音質",

@@ -87,11 +87,8 @@ const QualityPopover = memo(function QualityPopover() {
             } else {
                 showToast(t('quality.unavailable'), { type: 'warn' });
             }
-        } catch (error) {
-            showToast(t('quality.unavailable'), {
-                type: 'warn',
-                description: error instanceof Error ? error.message : String(error),
-            });
+        } catch {
+            showToast(t('quality.unavailable'), { type: 'warn' });
         } finally {
             setSwitching(false);
         }
@@ -113,30 +110,30 @@ const QualityPopover = memo(function QualityPopover() {
 
     if (sourceInfo.isLocal) {
         const format = sourceInfo.audioFormat;
-        const unknown = t('common.unknown');
         const numberFormat = new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 3 });
-        const codec = format?.codec || unknown;
+        const codec = format?.codec;
         const bitrate =
             format?.bitrate == null
-                ? unknown
+                ? undefined
                 : t('media.bitrate_value', { value: numberFormat.format(format.bitrate / 1000) });
-        const detail =
-            format?.lossless === true
-                ? t('quality.lossless')
-                : format?.bitrate != null
-                  ? bitrate
-                  : undefined;
-        const description = [
-            t('quality.local_fixed'),
-            ...(sourceInfo.metadataError
-                ? [`${t('quality.read_failed')}: ${sourceInfo.metadataError}`]
-                : []),
-            `${t('media.codec')}: ${codec}`,
-            `${t('media.lossless_encoding')}: ${format?.lossless == null ? unknown : t(format.lossless ? 'common.yes' : 'common.no')}`,
-            `${t('media.bitrate')}: ${bitrate}`,
-            `${t('media.sample_rate')}: ${format?.sampleRate == null ? unknown : t('media.sample_rate_value', { value: numberFormat.format(format.sampleRate / 1000) })}`,
-            `${t('media.bit_depth')}: ${format?.bitsPerSample == null ? unknown : t('media.bit_depth_value', { value: numberFormat.format(format.bitsPerSample) })}`,
-        ].join('\n');
+        const detail = format?.lossless === true ? t('quality.lossless') : bitrate;
+        const properties = [
+            codec ? `${t('media.codec')}: ${codec}` : null,
+            format?.lossless == null
+                ? null
+                : `${t('media.lossless_encoding')}: ${t(format.lossless ? 'common.yes' : 'common.no')}`,
+            bitrate ? `${t('media.bitrate')}: ${bitrate}` : null,
+            format?.sampleRate == null
+                ? null
+                : `${t('media.sample_rate')}: ${t('media.sample_rate_value', { value: numberFormat.format(format.sampleRate / 1000) })}`,
+            format?.bitsPerSample == null
+                ? null
+                : `${t('media.bit_depth')}: ${t('media.bit_depth_value', { value: numberFormat.format(format.bitsPerSample) })}`,
+        ].filter(Boolean);
+        const description =
+            [...properties, ...(sourceInfo.metadataError ? [t('quality.read_failed')] : [])].join(
+                '\n',
+            ) || t('quality.no_source');
 
         return (
             <span
@@ -146,12 +143,8 @@ const QualityPopover = memo(function QualityPopover() {
                 title={description}
                 aria-label={description}
             >
-                <span className="l-player-bar__quality-codec">
-                    {sourceInfo.metadataError ? t('quality.read_failed') : codec}
-                </span>
-                {!sourceInfo.metadataError && detail && (
-                    <span className="l-player-bar__quality-detail">{detail}</span>
-                )}
+                <span className="l-player-bar__quality-codec">{codec || detail || '—'}</span>
+                {codec && detail && <span className="l-player-bar__quality-detail">{detail}</span>}
             </span>
         );
     }
